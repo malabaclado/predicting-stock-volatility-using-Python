@@ -10,6 +10,7 @@ colorama==0.4.6
 comm==0.2.2
 debugpy==1.8.13
 decorator==5.2.1
+et_xmlfile==2.0.0
 exceptiongroup==1.2.2
 executing==2.2.0
 fastapi==0.115.12
@@ -29,6 +30,7 @@ mkl_random @ file:///C:/Users/dev-admin/mkl/mkl_random_1730822522280/work
 nest-asyncio==1.6.0
 numexpr @ file:///C:/b/abs_05o8p7bfml/croot/numexpr_1730215959182/work
 numpy==2.0.2
+openpyxl==3.1.5
 packaging==24.2
 pandas @ file:///C:/b/abs_e18w9ay4we/croot/pandas_1732735115740/work/dist/pandas-2.2.3-cp310-cp310-win_amd64.whl#sha256=6fc0a0523ea4ec3f23a2b790c738c857942b4c579479f8012ac8148d675b8975
 parso==0.8.4
