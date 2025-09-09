@@ -1,5 +1,7 @@
 services:
-  - name: app
+  - type: web
+    name: app
     env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port 80
+    plan: free
+    buildCommand: conda create --name my-env --file conda_requirements.txt
+    startCommand: conda activate my-env && uvicorn main:app --reload --workers 1 --host localhost --port 8008
