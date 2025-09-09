@@ -3,5 +3,5 @@ services:
     name: app
     env: python
     plan: free
-    buildCommand: conda create --name my-env --file conda_requirements.txt
+    buildCommand: pip install conda && conda create --name my-env --file conda_requirements.txt
     startCommand: conda activate my-env && uvicorn main:app --reload --workers 1 --host localhost --port 8008
