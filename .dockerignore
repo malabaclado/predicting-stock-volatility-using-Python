@@ -1,0 +1,8 @@
+my-env/
+__pycache__/
+*.sqlite
+.env
+.git/
+models/*.pkl
+.ipynb_checkpoints/
+*.ipynb
