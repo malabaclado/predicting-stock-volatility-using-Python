@@ -11,6 +11,7 @@ The project is designed for data science enthusiasts interested in financial mod
 - **Python**: If you're new to Python, it's a versatile programming language. Install it from [python.org](https://www.python.org/downloads/). We recommend Python 3.8 or later.
 - **Docker**: A tool to run applications in containers. Install from [docker.com](https://www.docker.com/get-started). It's essential for running this project easily without worrying about dependencies.
 - **Jupyter Notebooks**: For interactive demos. If new, think of it as a web-based environment to run Python code in cells. It's included in the Docker setup.
+- **Twelve Data API Key**: This project requires an API key from Twelve Data to fetch stock data. Sign up for a free account at [twelvedata.com](https://twelvedata.com/). After obtaining your API key, open the `.sample.env` file in the project directory, replace the placeholder value with your actual API key, and rename the file to `.env`. This ensures the application can access the API securely.
 
 ## API Guide
 
