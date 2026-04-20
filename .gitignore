@@ -2,6 +2,7 @@
 project-testing.ipynb
 working-notebook.ipynb
 /models
+.env
 
 
 # Byte-compiled / optimized / DLL files
