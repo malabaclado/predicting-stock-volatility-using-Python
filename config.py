@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     alpha_api_key: str
     alpha_api_key2: str
+    twelve_data_api_key: str
     db_name: str
     model_directory: str
 

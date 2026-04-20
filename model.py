@@ -5,7 +5,7 @@ import joblib
 import pandas as pd
 from arch import arch_model
 from config import settings
-from data import AlphaVantageAPI, SQLRepository
+from data import TwelveDataAPI, SQLRepository
 
 
 class GarchModel():
@@ -45,7 +45,7 @@ class GarchModel():
 
     def wrangle_data(self, n_observations):
 
-        """Extract data from database (or get from AlphaVantage), transform it
+        """Extract data from database (or get from TwelveData API), transform it
         for training model, and attach it to `self.data`.
 
         Parameters
@@ -60,7 +60,7 @@ class GarchModel():
         # Add new data to database if required
         if self.use_new_data:
             #Instantiate ALphaVantage API class
-            api= AlphaVantageAPI()
+            api= TwelveDataAPI()
             
             # Get the data
             new_data = api.get_daily(ticker=self.ticker)

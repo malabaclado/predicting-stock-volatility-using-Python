@@ -6,8 +6,8 @@ from fastapi import FastAPI
 from model import GarchModel
 from pydantic import BaseModel
 
+# Define input-output classes for `"/fit"` and `"/predict"` paths
 
-# Task 8.4.14, `FitIn` class
 class FitIn(BaseModel):
     ticker: str
     n_observations: int
@@ -15,29 +15,24 @@ class FitIn(BaseModel):
     q: int
     
 
-
-# Task 8.4.14, `FitOut` class
 class FitOut(FitIn):
     success: bool
     message: str
     
 
-
-# Task 8.4.18, `PredictIn` class
 class PredictIn(BaseModel):
     ticker: str
     n_days: int
     use_model:str = "latest"
 
 
-# Task 8.4.18, `PredictOut` class
 class PredictOut(PredictIn):
     success: bool
     forecast: dict
     message: str
 
 
-# Task 8.4.15
+# Build model function
 def build_model(ticker, use_new_data):
     '''
     
@@ -56,11 +51,9 @@ def build_model(ticker, use_new_data):
     return model
 
 
-# Task 8.4.9
+# Start FastAPI application
 app = FastAPI()
 
-
-# Task 8.4.11
 # `"/hello" path with 200 status code
 @app.get("/hello", status_code=200)
 def hello():
@@ -69,7 +62,7 @@ def hello():
 
 
 
-# Task 8.4.16, `"/fit" path, 200 status code
+# `"/fit" path, 200 status code
 @app.post("/fit", status_code=200, response_model=FitOut)
 def fit_model(request: FitIn):
 
@@ -122,7 +115,7 @@ def fit_model(request: FitIn):
     return response
 
 
-# Task 8.4.19 `"/predict" path, 200 status code
+# `"/predict" path, 200 status code
 @app.post("/predict", status_code=200, response_model=PredictOut)
 def get_prediction(request: PredictIn):
 

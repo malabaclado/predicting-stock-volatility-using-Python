@@ -1,31 +1,34 @@
 """This is for all the code used to interact with the AlphaVantage API
 and the SQLite database. Remember that the API relies on a key that is
-stored in your `.env` file and imported via the `config` module.
+stored in the `.env` file and imported via the `config` module.
 """
 
 import sqlite3
 
 import pandas as pd
 import requests
+from tornado.web import url
 from config import settings
 
 
-class AlphaVantageAPI:
+class TwelveDataAPI:
     def __init__(self):
-        self.__api_key = settings.alpha_api_key
+        self.__api_key = settings.twelve_data_api_key
 
-    def get_daily(self, ticker, output_size="full"):
+    def get_daily(self, ticker, output_size=90, interval="1day"):
     
-        """Get daily time series of an equity from AlphaVantage API.
+        """Get daily time series of an equity from Twelve Data API.
 
         Parameters
         ----------
         ticker : str
             The ticker symbol of the equity.
-        output_size : str, optional
+        output_size : int, optional
             Number of observations to retrieve. "compact" returns the
             latest 100 observations. "full" returns all observations for
             equity. By default "full".
+        interval : str, optional
+            Time interval between observations. By default "1day".
 
         Returns
         -------
@@ -34,34 +37,37 @@ class AlphaVantageAPI:
             All columns are numeric.
         """
         url = (
-            "https://www.alphavantage.co/query?"
-            "function=TIME_SERIES_DAILY&"
+            "https://api.twelvedata.com/time_series?"
             f"symbol={ticker}&"
+            f"interval={interval}&"
             f"outputsize={output_size}&"
-            f"datatype=json&"
             f"apikey={self.__api_key}"
         )
 
         # Send request to API
         response = requests.get(url)
-        response_data = response.json()
-        
-        if "Time Series (Daily)" not in response_data.keys():
+        response_data = response.json() #returns a json with two keys: meta and values
+
+        # Error handling: if API call was unsuccessful, raise exception with error message
+        if "meta" not in response_data.keys():
+            error_msg = response_data['message']
             raise Exception(
-                f"Invalid API call. Invalid ticker symbol '{ticker}'."
+                f"Invalid API call. Error message: {error_msg}"
             )
-        
-        stock_data = "Time Series (Daily)"
-        df = pd.DataFrame(response_data[stock_data].values(), index=response_data[stock_data].keys())
-        
+
+        # Convert API response to DataFrame
+        df = pd.DataFrame(response_data['values'])
+
+        # Set 'datetime' column as index
+        df.set_index('datetime', inplace=True)
         df.index = pd.to_datetime(df.index)
         df.index.name = "date"
-        
-        df.columns = [i.split(". ")[1] for i in df.columns]
-        for i in df.columns:
-            # df[i] = pd.to_numeric(df[i])
-            df[i] = df[i].astype("float")
-        
+
+        # Convert 'open', 'high', 'low', 'close' to float 
+        df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].astype(float) 
+
+        # Convert 'volume' to integer
+        df['volume'] = df['volume'].astype(int) 
 
         # Return results
         return df
@@ -71,7 +77,7 @@ class SQLRepository:
     def __init__(self, connection):
         self.connection = connection
 
-    def insert_table(self, table_name, records, if_exists="fail"):
+    def insert_table(self, table_name, records, if_exists="replace"):
     
         """Insert DataFrame into SQLite database as table
 
@@ -134,11 +140,8 @@ class SQLRepository:
             LIMIT {limit}
             '''
        # Retrieve data, read into DataFrame
-        df = pd.read_sql(sql, self.connection, index_col='date')
-        
+        df = pd.read_sql(sql, self.connection, index_col='date')        
         df.index = pd.to_datetime(df.index)
-        # df.index.name = "date"
-        
 
         # Return DataFrame
         return df
