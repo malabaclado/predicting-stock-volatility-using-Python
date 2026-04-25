@@ -4,7 +4,6 @@
 
 This project demonstrates how to predict stock volatility using Python. It pulls historical stock prices from the TwelveData API, stores the data in a SQLite database, trains an ARCH (Autoregressive Conditional Heteroskedasticity) model for volatility prediction, and deploys the model via a FastAPI web service. This work is inspired by a project from the WorldQuant Applied Data Science program.
 
-The project is designed for data science enthusiasts interested in financial modeling, time series analysis, and machine learning deployment. It assumes basic familiarity with Python, but newcomers will find guidance below.
 
 ### Prerequisites
 
@@ -37,15 +36,15 @@ Parameters:
 
 Returns: Predicted volatility values as JSON.
 
-## How to Run the Project with Docker Build
+## How to Run the API server with Docker Build
+If you're new to Docker, it packages the app and its environment, so you don't need to install Python libraries manually.
 
 1. **Clone the Repository**: Download the project files from GitHub to your local machine.
-2. **Navigate to the Project Directory**: Open a terminal and go to the folder containing the project (e.g., `cd /d:/1 PROJECTS/Github/predicting-stock-volatility-using-Python`).
+2. **Navigate to the Project Directory**: Open a terminal and go to the folder containing the project (e.g., `cd /d:/Github/predicting-stock-volatility-using-Python`).
 3. **Build the Docker Image**: Run `docker build .` to create a container image with all dependencies.
 4. **Run the Container**: Execute `docker run -p 8000:8000 <image_name>` (replace `<image_name>` with the built image ID or name).
 5. **Access Swagger UI**: Open a web browser and go to `http://localhost:8000/docs` to interact with the API endpoints via Swagger. This is a user-friendly interface to test the `/fit` and `/predict` endpoints without coding.
 
-If you're new to Docker, it packages the app and its environment, so you don't need to install Python libraries manually.
 
 ## How to Run the Project and Demo with Docker Compose
 
@@ -71,4 +70,4 @@ This ensures resources are freed and prevents conflicts on subsequent runs.
 
 ## Project Demo
 
-The demo notebook provides a step-by-step guide to the project's workflow, including data visualization and model evaluation.
+The `project-demo.ipynb` notebook provides a step-by-step guide to the project's workflow, including data visualization and model evaluation.
