@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     twelve_data_api_key: str
     db_name: str
     model_directory: str
+    exchange_tz: str
+    eod_available_hour: int
 
     class Config:
         env_file = return_full_path(".env")

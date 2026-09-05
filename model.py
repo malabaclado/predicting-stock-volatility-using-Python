@@ -1,11 +1,32 @@
 import os
+import sqlite3
 from glob import glob
 
+import pickle
 import joblib
 import pandas as pd
+import numpy as np
 from arch import arch_model
 from config import settings
-from data import TwelveDataAPI, SQLRepository
+
+from data import TwelveDataAPI, SQLRepository, get_start_date, get_latest_expected_eod
+
+
+def build_model(ticker: str) -> object:
+    """
+    Initializes database connection, creates a SQLRepository object and a GarchModel object.
+    """
+    # Create DB connection
+    connection = sqlite3.connect(database=settings.db_name, check_same_thread=False)
+
+    # Create `SQLRepository`
+    repo = SQLRepository(connection)
+
+    # Create model
+    model = GarchModel(ticker, repo)
+
+    # Return model
+    return model
 
 
 class GarchModel():
@@ -37,48 +58,79 @@ class GarchModel():
         Load trained model from file.
     """
 
-    def __init__(self, ticker, repo, use_new_data):
+    def __init__(self, ticker, repo):
         self.ticker = ticker
         self.repo = repo
-        self.use_new_data = use_new_data
         self.model_directory = settings.model_directory
 
-    def wrangle_data(self, n_observations):
+    def get_daily_returns(self, period: str = "3y") -> pd.Series:
+        identifier = self.ticker
+        connection = self.repo
+        start_date_str = get_start_date(period)
+        req_start_date = pd.to_datetime(start_date_str)
+        latest_expected_date = get_latest_expected_eod().strftime("%Y-%m-%d")
 
-        """Extract data from database (or get from TwelveData API), transform it
-        for training model, and attach it to `self.data`.
+        df = None
 
-        Parameters
-        ----------
-        n_observations : int
-            Number of observations to retrieve from database
+        # 1. Try reading from SQLite cache
+        try:
+            cached_df = connection.read_table(
+                identifier, start_date_str, latest_expected_date
+            )
+            if not cached_df.empty:
+                # Normalize index to DatetimeIndex for accurate date comparison
+                if not isinstance(cached_df.index, pd.DatetimeIndex):
+                    cached_df.index = pd.to_datetime(cached_df.index)
 
-        Returns
-        -------
-        None
-        """
-        # Add new data to database if required
-        if self.use_new_data:
-            #Instantiate ALphaVantage API class
-            api= TwelveDataAPI()
-            
-            # Get the data
-            new_data = api.get_daily(ticker=self.ticker)
-            
-            # Insert the data to self.repo
-            self.repo.insert_table(table_name=self.ticker, records=new_data, if_exists='replace')
+                # Check if the cache covers the full requested lookback period
+                # Allowing a small 5-day grace window for weekends/holidays
+                earliest_cached = cached_df.index.min()
+                if earliest_cached <= (req_start_date + pd.Timedelta(days=5)):
+                    df = cached_df
+                else:
+                    print(
+                        f"[Cache Incomplete] Requested start: {req_start_date.date()}, "
+                        f"earliest cached: {earliest_cached.date()}. Fetching fresh data..."
+                    )
+        except (ValueError, Exception) as exc:
+            print(f"[Cache Miss] {exc}. Fetching from API...")
 
-        # Pull data from SQL database
-        df = self.repo.read_table(table_name=self.ticker, limit=n_observations)
-        
+        # 2. Fetch from API if cache was missing or incomplete
+        if df is None or df.empty:
+            api = TwelveDataAPI()
+            # Ensure idType gets the proper string (e.g. self.id_type or 'ticker'), not the built-in `type`
+            id_type = getattr(self, "id_type", "ticker")
+            df = api.fetch_data_from_api(
+                identifier, start_date_str, idType=id_type
+            )
 
-        # Clean data, attach to class as `data` attribute
-        df.sort_values(by="date", ascending=True, inplace=True)
-        df["return"] = df["close"].pct_change() * 100
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df.index = pd.to_datetime(df.index)
 
-        self.data = df["return"].fillna(0)
+            # 3. Save or update cache in database
+            connection.insert_table(identifier, df)
+            print("Data saved to /market_data.sqlite")
 
-    def fit(self, p,q):
+        # 4. Filter to exact requested window
+        df = df.loc[
+            (df.index >= req_start_date)
+            & (df.index <= pd.to_datetime(latest_expected_date))
+        ].copy()
+
+        # 5. Sort chronologically
+        if "date" in df.columns:
+            df.sort_values(by="date", ascending=True, inplace=True)
+        else:
+            df.sort_index(ascending=True, inplace=True)
+
+        # 6. Calculate Log Returns
+        # dropna() removes the first NaN caused by shifting
+        log_returns = np.log(df["close"] / df["close"].shift(1)).dropna()
+
+        self.data = log_returns
+        return self.data
+
+    def fit(self, p, q, dist):
 
         """Create model, fit to `self.data`, and attach to `self.model` attribute.
         For assignment, also assigns adds metrics to `self.aic` and `self.bic`.
@@ -96,29 +148,26 @@ class GarchModel():
         None
         """
 
-        # Attach p,q to self. Use: naming models
-        self.p=p
-        self.q=q
-
-        # Identify the index of 80th percentile
-        cutoff_test = int(len(self.data)*0.8)
+        # Hard-coded GARCH variables
+        daily_log_returns = self.data
+        scaled_returns = daily_log_returns * 100
         
-        # Create training dataset 
-        train_data = self.data.iloc[:cutoff_test]
-        
-        # Fit a GARCH model
         model = arch_model(
-            train_data, 
-            p=p,
-            q=q, 
-            rescale = False
-        ).fit(disp=0)
+                scaled_returns, 
+                p=p,
+                q=q, 
+                mean="Zero",
+                dist=dist,
+                rescale = False
+            ).fit(disp=0)
+        
         
         # Train Model, attach to `self.model`
+        self.p = p
+        self.q = q
         self.model = model
-        self.aic = model.aic
-        self.bic = model.bic
-
+        self.trained_date = model._datetime
+        
         return model
         
         
@@ -197,15 +246,17 @@ class GarchModel():
         # timestamp = pd.Timestamp.now().isoformat()
         timestamp = pd.Timestamp.now().strftime("%Y-%m-%dT%H-%M-%S.%f")
         
-        
         # Create filepath, including `self.model_directory`
-        filepath = os.path.join(self.model_directory, f"{timestamp}-ARCH{self.p}{self.q}_{self.ticker}.pkl")
+        name = f"{timestamp}-GARCH{self.p}{self.q}_{self.ticker}"
+        filepath = os.path.join(self.model_directory, f"{name}.pkl")
         
-        # Save `self.model`
-        joblib.dump(self.model, filepath)
+        # # Save `self.model`
+        # joblib.dump(self.model, filepath)
+        with open(filepath, "wb") as f:
+            pickle.dump(self.model, f)
 
-        # Return filepath
-        return filepath
+        # Return name and filepath
+        return name, filepath
     
 
     def load(self, use_model):
@@ -226,7 +277,10 @@ class GarchModel():
             raise Exception(f"No model trained for '{self.ticker}'")
         
         # Load model and attach to `self.model`
-        self.model = joblib.load(model_path)
+        # self.model = joblib.load(model_path)
+        with open(model_path, 'rb') as f:
+            self.model = pickle.load(f)
+        
         self.model_name = model_path
         print(f"Loaded model from {model_path}")
 

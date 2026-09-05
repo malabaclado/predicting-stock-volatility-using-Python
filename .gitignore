@@ -1,8 +1,13 @@
 # Ignored files
 project-testing.ipynb
 working-notebook.ipynb
+predicting-stock-volatility-and-var.ipynb
 /models
 .env
+fastapi/
+sample.py
+stocks.sqlite
+test.py
 
 
 # Byte-compiled / optimized / DLL files

@@ -54,8 +54,8 @@ Docker Compose simplifies running multiple services together, including the API 
 2. **Clone the Repository**: As above.
 3. **Navigate to the Directory**: As above.
 4. **Run with Compose**: Execute `docker-compose up` (or `docker compose up` on newer versions). This starts the FastAPI service and a Jupyter Notebook server.
-5. **Access the API**: Visit `http://localhost:8000/docs` for Swagger.
-6. **Access the Demo Notebook**: Open `http://localhost:8888` in your browser. If prompted, enter the token from the terminal output (usually shown when Compose starts). The notebook (`project_demo.ipynb`) walks through data fetching, model training, and predictions interactively.
+5. **Access the API**: Visit http://localhost:8000/docs for Swagger.
+6. **Access the Demo Notebook**: Open http://localhost:8888 in your browser. If prompted, enter the token from the terminal output (usually shown when Compose starts). The notebook (`project_demo.ipynb`) walks through data fetching, model training, and predictions interactively.
 
 For Jupyter newcomers: Notebooks run code in cells. Click a cell and press Shift+Enter to execute. Explore the demo to see volatility predictions in action. If issues arise, check Docker logs with `docker-compose logs`.
 

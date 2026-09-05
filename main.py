@@ -1,58 +1,116 @@
+### IMPORT PACKAGES
+
 import sqlite3
+from enum import Enum
+from fastapi import FastAPI, HTTPException, status
+from typing import Dict, List, Literal, Optional
+from datetime import date, datetime
+from inspect import cleandoc
 
-from config import settings
-from data import SQLRepository
-from fastapi import FastAPI
-from model import GarchModel
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from arch.unitroot import ADF
+from statsmodels.stats.diagnostic import het_arch
 
-# Define input-output classes for `"/fit"` and `"/predict"` paths
+from data import get_start_date, TwelveDataAPI, get_current_timestamp
+from model import build_model
 
-class FitIn(BaseModel):
-    ticker: str
-    n_observations: int
-    p: int
-    q: int
+
+### DATA MODELS
+
+class IdentifierType(str, Enum):
+    ISIN = "isin"
+    TICKER = "ticker"
+
+class WindowPeriod(str, Enum):
+    ONE_YEAR = "1y"
+    THREE_YEAR = "3y"
+    FIVE_YEAR = "5y"
     
-
-class FitOut(FitIn):
-    success: bool
-    message: str
+class ErrorDistribution(str, Enum):
+    NORMAL = "normal"
+    STUDENTS_T = "studentst"
+    SKEWT = "skewt"
+    GED = "ged"
     
-
-class PredictIn(BaseModel):
-    ticker: str
-    n_days: int
-    use_model:str = "latest"
-
-
-class PredictOut(PredictIn):
-    success: bool
-    forecast: dict
-    message: str
-
-
-# Build model function
-def build_model(ticker, use_new_data):
-    '''
+class Parameters(BaseModel):
+    p: int = Field(default=1, description="Parameter p")
+    q: int = Field(default=1, description="Parameter q")
     
-    '''
+class GARCHParameters(BaseModel):
+    p: int = Field(default=1, ge=1, le=5, description="GARCH lag order")
+    q: int = Field(default=1, ge=1, le=5, description="ARCH lag order")
+    
+class DataMetadata(BaseModel):
+    identifier: str
+    start_date: date
+    end_date: date
+    total_observations: int
+    
+class FitQualityMetrics(BaseModel):
+    log_likelihood: float
+    aic: float = Field(..., description="Akaike Information Criterion")
+    bic: float = Field(..., description="Bayesian Information Criterion")
+    converged: bool = Field(..., description="Whether the optimizer reached convergence")
 
-    # Create DB connection
-    connection = sqlite3.connect(database=settings.db_name, check_same_thread=False)
+class ParameterEstimate(BaseModel):
+    value: float
+    std_err: Optional[float] = None
+    t_stat: Optional[float] = None
+    p_value: Optional[float] = None
+    
+class FitRequest(BaseModel):
+    identifier: str = Field(
+        ...,
+        examples=["AAPL", "US0378331005"],
+        description="Asset identifier (Ticker or ISIN)",
+    )
+    type: IdentifierType = Field(
+        default=IdentifierType.TICKER,
+        description="Type of the identifier provided",
+    )
+    window_period: WindowPeriod = Field(
+        default=WindowPeriod.THREE_YEAR,
+        description="Historical window used for fetching price data and fitting",
+    )
+    parameters: GARCHParameters = Field(
+        default_factory=GARCHParameters,
+        description="Lag orders for the GARCH(p, q) process",
+    )
+    distribution: ErrorDistribution = Field(
+        default=ErrorDistribution.STUDENTS_T,
+        description="Assumed residual error distribution",
+    )
+    include_coefficients: bool = Field(
+        default=False,
+        description="Whether to include estimated parameter coefficients in the response",
+    )
+    
+class FitSummary(BaseModel):
+    model: str
+    parameters: GARCHParameters
+    distribution: ErrorDistribution
+    trained_at: datetime
 
-    # Create `SQLRepository`
-    repo = SQLRepository(connection)
-
-    # Create model
-    model = GarchModel(ticker, repo, use_new_data=use_new_data)
-
-    # Return model
-    return model
-
+class FitResponse(BaseModel):
+    status: Literal["success", "failed"] = "success"
+    name: str = Field(
+        ...,
+        examples=["20260904_140536-ARCH11_AAPL"],
+        description="Artifact identifier formatted as {timestamp}-ARCH{p}{q}_{ticker}",
+    )
+    summary: FitSummary
+    data: DataMetadata
+    metrics: FitQualityMetrics
+    coefficients: Optional[Dict[str, ParameterEstimate]] = Field(
+        default=None,
+        description="Estimated parameters; omitted when include_coefficients is false",
+    )
+  
+class ErrorDetail(BaseModel):
+    detail: str = Field(..., example="Optimizer failed to converge after 500 iterations.")
 
 # Start FastAPI application
-app = FastAPI()
+app = FastAPI(title="Financial Econometrics API")
 
 # `"/hello" path with 200 status code
 @app.get("/hello", status_code=200)
@@ -60,141 +118,179 @@ def hello():
     """Return dictionary with greeting message."""
     return {"message" : "Hello, World"}
 
-
-
-# `"/fit" path, 200 status code
-@app.post("/fit", status_code=200, response_model=FitOut)
-def fit_model(request: FitIn):
-
-    """Pulls data from TwelveData API, trains GARCH model, and saves model to file.
-
-    Parameters
-    ----------
-    request : FitIn
-        An instance of the `FitIn` class with the following attributes:
-
-    - `ticker`: str, ticker symbol of the equity whose volatility will be predicted.
-
-    - `n_observations`: int, number of observations to retrieve from database for training model.
-
-    - `p`: int, order of GARCH terms in model.
+@app.get("/diagnostics/check", status_code=200)
+def diagnostics(identifier : str, type : IdentifierType = 'ticker', period : WindowPeriod = '3y'):
+    """Tests stationarity and ARCH effects on a time-series of equity returns during a specified period."""
     
-    - `q`: int, order of ARCH terms in model.
+    response = {
+        "id" : identifier,
+        "type" : type,
+    }
 
-    Returns
-    ------
-    dict
-        A dictionary with the following keys:
+    # Get start date
+    date_start = get_start_date(period)
+    
+    # Get data from API
+    api = TwelveDataAPI()
+    prices = api.fetch_data_from_api(identifier, date_start, type)
+    
+    # Calculate % returns
+    returns = 100 * prices['close'].pct_change().dropna()
 
-    - `success`: bool, whether model was successfully trained and saved.
+    # 1. Check Stationarity
+    adf = ADF(returns)
 
-    - `message`: str, message with either the filename of the saved model or an error message.
+    # 2. Check for ARCH Effects (Engle's LM Test)
+    # het_arch() returns: (lm_stat, p_value, f_stat, f_pvalue)
+    lm_stat, p_value, _, _ = het_arch(returns, nlags=5)
 
-    """
-    # Create `response` dictionary from `request`
-    response = request.dict()
-
-    # Create try block to handle exceptions
-    try:
-        # Build model with `build_model` function
-        model = build_model(ticker=request.ticker, use_new_data=True)
-
-        # Wrangle data
-        model.wrangle_data(n_observations=request.n_observations)
-
-        # Fit model
-        model.fit(p=request.p, q=request.q)
-
-        # Save model
-        filename = model.dump()
-
-        # Add `"success"` key to `response`
-        response["success"] = True
-
-
-        # Add `"message"` key to `response` with `filename`
-        # response["message"] = f"Trained and saved '{filename}'."
-        response["message"] = f"Trained and saved '{filename}'. Metrics: AIC {model.aic}, BIC {model.bic}."
-
-    # Create except block
-    except Exception as e:
-        # Add `"success"` key to `response`
-        response["success"] = False
-
-        # Add `"message"` key to `response` with error message
-        response["message"] = str(e)
-
-    # Return response
+    data = {
+        "is_stationary": bool(adf.pvalue < 0.05),
+        "has_arch_effects": bool(p_value < 0.05),
+        "adf_pvalue": float(adf.pvalue),
+        "arch_lm_pvalue": float(p_value),
+        "recommendation": (
+            "Proceed with GARCH(1,1)"
+            if (adf.pvalue < 0.05 and p_value < 0.05)
+            else "GARCH(1,1) may not be suitable for this series."
+        ),
+    }
+    # Update response
+    response['date'] = {
+            "start" : prices.index[-1].strftime("%Y-%m-%d"),
+            "end" : prices.index[0].strftime("%Y-%m-%d")
+        }
+    
+    response['data'] = data
+    
     return response
 
 
-# `"/predict" path, 200 status code
-@app.post("/predict", status_code=200, response_model=PredictOut)
-def get_prediction(request: PredictIn):
-    """
-    Generates volatility predictions for a given stock using a trained GARCH model.
 
-    Parameters
-    ----------
-    request : PredictIn
-        An instance of the `PredictIn` class with the following attributes:
+@app.post(
+    "/models/fit", 
+    response_model=FitResponse, 
+    response_model_exclude_none=True,
+    status_code=status.HTTP_201_CREATED, 
+    operation_id="fit_garch_model",
+    summary="Fit GARCH(p,q) volatility model",
+    description="""Fits an **autoregressive conditional heteroskedasticity (GARCH)** model on historical daily log returns.""",
+    responses = {
+            201: {
+                "description": "Model fitted successfully and artifact generated.",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "status": "success",
+                            "name": "20260904-GARCH11_AAPL",
+                            "data_summary": {
+                                "identifier": "AAPL",
+                                "start_date": "2023-09-01",
+                                "end_date": "2026-09-01",
+                                "total_observations": 754
+                            },
+                            "metrics": {
+                                "log_likelihood": 2245.81,
+                                "aic": -4481.62,
+                                "bic": -4458.5,
+                                "converged": True
+                            },
+                            "coefficients": {
+                                "mu": {"value": 0.00084, "std_err": 0.00038, "t_stat": 2.21, "p_value": 0.027},
+                                "omega": {"value": 0.000012, "std_err": 0.000004, "t_stat": 3.0, "p_value": 0.0027},
+                                "alpha[1]": {"value": 0.085, "std_err": 0.019, "t_stat": 4.47, "p_value": 0.00001},
+                                "beta[1]": {"value": 0.865, "std_err": 0.028, "t_stat": 30.89, "p_value": 0.0}
+                            }
+                        }
+                    }
+                },
+            },
+            # 400: {
+            #     "model": ErrorDetail,
+            #     "description": "Insufficient observations or invalid parameter configuration."
+            # },
+            # 422: {
+            #     "description": "Validation error: invalid request payload or unrecognized identifier format."
+            # },
+            # 500: {
+            #     "model": ErrorDetail,
+            #     "description": "Model optimization failure or internal data retrieval failure."
+            # }
+        }
+    )
+def fit(payload: FitRequest):
+    """Fit a GARCH(p, q) volatility model for a specified financial asset.
 
-    - `ticker`: str, ticker symbol of the equity whose volatility will be predicted.
-
-    - `n_days`: int, number of days for which to generate predictions.
-
-    - `use_model`: str, name of the stored model to use for predictions.
-
-    Returns
-    -------
-    dict
-        A dictionary with the following keys:
-
-    - `success`: bool, whether prediction was successful.
-
-    - `forecast`: dict, dictionary containing the predicted volatility values.
+    Fetches historical daily returns for the given asset identifier across
+    the requested lookback window, estimates model parameters using maximum
+    likelihood estimation, and returns goodness-of-fit metrics along with
+    optional parameter estimates."""
     
-    - `message`: str, message with either the forecast or an error message.
-    """
-
-    # Create `response` dictionary from `request`
-    response = request.dict()
-
-    # Create try block to handle exceptions
-    try:
-        # Build model with `build_model` function
-        model = build_model(ticker=request.ticker, use_new_data=False)
-
-        # Load stored model
-        model.load(request.use_model)
-
-        # Generate prediction
-        prediction = model.predict_volatility(horizon = request.n_days)
-
-        # Add `"success"` key to `response`
-        response["success"] = True
-
-        # Add `"model_name"` key to `response`
-        response["model_name"] = model.model_name
-
-        # Add `"forecast"` key to `response`
-        response["forecast"] = prediction
-
-        # Add `"message"` key to `response`
-        response["message"] = ""
-
-        
-
-    # Create except block
-    except Exception as e:
-        # Add `"success"` key to `response`
-        response["success"] = False
-
-        # Add `"forecast"` key to `response`
-        response["forecast"] = {}
-
-        #  Add `"message"` key to `response`
-        response["message"] = str(e)
-
-    # Return response
+    identifier = payload.identifier
+    period = payload.window_period
+    p,q = payload.parameters.p, payload.parameters.q
+    dist = payload.distribution.value
+    
+    #Build GARCH Model
+    model = build_model(identifier)
+    model.get_daily_returns(period)
+    model.fit(p,q,dist)
+    
+    model_name, path = model.dump()
+    
+    res = model.model
+    
+    coefficients_dict=None
+    if payload.include_coefficients:
+        coefficients_dict = {
+            str(param): ParameterEstimate(
+                value=res.params[param],
+                std_err=getattr(res, "std_err", {}).get(param),
+                t_stat=getattr(res, "tvalues", {}).get(param),
+                p_value=getattr(res, "pvalues", {}).get(param),
+            )
+            for param in res.params.index
+        }
+    
+    response = FitResponse(
+        status = 'success',
+        name = model_name,
+        summary= FitSummary(
+            model = 'GARCH',
+            parameters = GARCHParameters(
+                p = payload.parameters.p,
+                q = payload.parameters.q
+            ),
+            distribution = payload.distribution.value,
+            trained_at = model.trained_date
+        ),
+        data = DataMetadata(
+            identifier=identifier,
+            start_date=model.data.index[0],
+            end_date=model.data.index[-1],
+            total_observations=len(model.data)
+        ),
+        metrics=FitQualityMetrics(
+                    log_likelihood=float(res.loglikelihood),
+                    aic=float(res.aic),
+                    bic=float(res.bic),
+                    converged=bool(res.convergence_flag == 0),
+                ),
+        coefficients=coefficients_dict
+    )
     return response
+
+@app.post(
+    "/models/forecast", 
+    status_code=200
+    )
+def forecast():
+    return {"message" : "This endpoint returns volatility and value-at-risk predictions."}
+
+# @app.get("/models", status_code=200)
+# def list_models():
+#     return {"message" : "This endpoint returns a list of saved models based on a filter criteria."}
+
+# @app.get("/models/{model_id}", status_code=200)
+# def get_model():
+#     return {"message" : "This endpoint returns key information about a saved model."}

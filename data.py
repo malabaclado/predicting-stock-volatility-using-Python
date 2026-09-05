@@ -3,19 +3,48 @@ and the SQLite database. Remember that the API relies on a key that is
 stored in the `.env` file and imported via the `config` module.
 """
 
-import sqlite3
-
 import pandas as pd
 import requests
-from tornado.web import url
 from config import settings
+from datetime import datetime, timedelta, timezone
+
+def get_start_date(period):
+    lookback = {
+        '1y' : 1,
+        '3y' : 3,
+        '5y' : 5
+    }
+    
+    latestDate = get_latest_expected_eod()
+    startDate = (latestDate - timedelta(days=365*lookback[period])).strftime("%Y-%m-%d")
+    return startDate
+
+def get_latest_expected_eod() -> pd.Timestamp:
+    now_tz = pd.Timestamp.now(tz=settings.exchange_tz)
+    
+    # If it's before 5:00 PM Eastern, the latest completed EOD bar is from the previous business day
+    if now_tz.hour < settings.eod_available_hour:
+        expected = now_tz - pd.tseries.offsets.BDay(1)
+    else:
+        expected = now_tz
+        
+    # If the computed date falls on a weekend, roll back to Friday
+    if expected.dayofweek > 4:
+        expected -= pd.tseries.offsets.BDay(1)
+        
+    # Return as timezone-naive midnight timestamp to match SQLite date formats
+    return expected.normalize().tz_localize(None)
+
+def get_current_timestamp():
+    timestamp = datetime.now(timezone.utc)
+    return timestamp
 
 
 class TwelveDataAPI:
     def __init__(self):
         self.__api_key = settings.twelve_data_api_key
 
-    def get_daily(self, ticker, output_size=90, interval="1day"):
+    def fetch_data_from_api(self, identifier, start_date, idType="ticker"):
     
         """Get daily time series of an equity from Twelve Data API.
 
@@ -23,12 +52,12 @@ class TwelveDataAPI:
         ----------
         ticker : str
             The ticker symbol of the equity.
-        output_size : int, optional
-            Number of observations to retrieve. "compact" returns the
-            latest 100 observations. "full" returns all observations for
-            equity. By default "full".
+        period : str, optional
+            Lookback period for the time series data. Options are "1y",
+            "3y", and "5y". By default "5y".
         interval : str, optional
-            Time interval between observations. By default "1day".
+            Time interval between two consecutive data points.
+            By default "1day".
 
         Returns
         -------
@@ -36,14 +65,16 @@ class TwelveDataAPI:
             Columns are 'open', 'high', 'low', 'close', and 'volume'.
             All columns are numeric.
         """
+        
         url = (
             "https://api.twelvedata.com/time_series?"
-            f"symbol={ticker}&"
-            f"interval={interval}&"
-            f"outputsize={output_size}&"
+            f"{'symbol' if idType == 'ticker' else 'isin'}={identifier}&"
+            f"interval=1day&"
+            f"start_date={start_date}&"
             f"apikey={self.__api_key}"
         )
-
+        
+        
         # Send request to API
         response = requests.get(url)
         response_data = response.json() #returns a json with two keys: meta and values
@@ -62,12 +93,15 @@ class TwelveDataAPI:
         df.set_index('datetime', inplace=True)
         df.index = pd.to_datetime(df.index)
         df.index.name = "date"
-
+        
         # Convert 'open', 'high', 'low', 'close' to float 
         df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].astype(float) 
 
         # Convert 'volume' to integer
         df['volume'] = df['volume'].astype(int) 
+        
+        # Sort index from latest to oldest
+        df.sort_index(ascending=False, inplace=True)
 
         # Return results
         return df
@@ -88,7 +122,7 @@ class SQLRepository:
         if_exists : str, optional
             How to behave if the table already exists.
 
-            - 'fail': Raise a ValueError.
+            - 'fail': Raise a ValueError
             - 'replace': Drop the table before inserting new values.
             - 'append': Insert new values to the existing table.
 
@@ -110,38 +144,30 @@ class SQLRepository:
         }
 
 
-    def read_table(self, table_name, limit=None):
+    def read_table(self, table_name: str, date_start: str, date_end: str) -> pd.DataFrame:
     
-        """Read table from database.
-
-        Parameters
-        ----------
-        table_name : str
-            Name of table in SQLite database.
-        limit : int, None, optional
-            Number of most recent records to retrieve. If `None`, all
-            records are retrieved. By default, `None`.
-
-        Returns
-        -------
-        pd.DataFrame
-            Index is DatetimeIndex "date". Columns are 'open', 'high',
-            'low', 'close', and 'volume'. All columns are numeric.
         """
-        # Create SQL query (with optional limit)
+        Read table from database.
+        """
+        import sqlite3
         
-        if limit == None:
-             sql = f'''SELECT *
-            FROM '{table_name}'
-            '''
-        else:
-             sql = f'''SELECT *
-            FROM '{table_name}'
-            LIMIT {limit}
-            '''
-       # Retrieve data, read into DataFrame
-        df = pd.read_sql(sql, self.connection, index_col='date')        
-        df.index = pd.to_datetime(df.index)
-
+        query = f'''
+        SELECT * 
+        FROM {table_name}
+        WHERE DATE(date) >= DATE(?) 
+            AND DATE(date) <= DATE(?)
+        ORDER BY date ASC
+        '''
+         
+        try:
+            df = pd.read_sql(query, self.connection, params=(date_start, date_end), index_col='date', parse_dates=['date'])
+        except (sqlite3.OperationalError, pd.errors.DatabaseError) as exc:
+            if f"no such table: {table_name}" in str(exc):
+                raise ValueError(f"Table '{table_name}' does not exist.") from exc
+            raise
+             
+        if df.empty:
+            raise ValueError(f"Table '{table_name}' contains no data for the specified date range.")
+            
         # Return DataFrame
         return df
