@@ -228,6 +228,7 @@ class GarchModel():
         # Load model and attach to `self.model`
         self.model = joblib.load(model_path)
         self.model_name = model_path
+        print(f"Loaded model from {model_path}")
 
         return self.model
 

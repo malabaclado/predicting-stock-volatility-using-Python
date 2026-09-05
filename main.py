@@ -66,16 +66,30 @@ def hello():
 @app.post("/fit", status_code=200, response_model=FitOut)
 def fit_model(request: FitIn):
 
-    """Fit model, return confirmation message.
+    """Pulls data from TwelveData API, trains GARCH model, and saves model to file.
 
     Parameters
     ----------
     request : FitIn
+        An instance of the `FitIn` class with the following attributes:
+
+    - `ticker`: str, ticker symbol of the equity whose volatility will be predicted.
+
+    - `n_observations`: int, number of observations to retrieve from database for training model.
+
+    - `p`: int, order of GARCH terms in model.
+    
+    - `q`: int, order of ARCH terms in model.
 
     Returns
     ------
     dict
-        Must conform to `FitOut` class
+        A dictionary with the following keys:
+
+    - `success`: bool, whether model was successfully trained and saved.
+
+    - `message`: str, message with either the filename of the saved model or an error message.
+
     """
     # Create `response` dictionary from `request`
     response = request.dict()
@@ -99,7 +113,7 @@ def fit_model(request: FitIn):
 
 
         # Add `"message"` key to `response` with `filename`
-        response["message"] = f"Trained and saved '{filename}'."
+        # response["message"] = f"Trained and saved '{filename}'."
         response["message"] = f"Trained and saved '{filename}'. Metrics: AIC {model.aic}, BIC {model.bic}."
 
     # Create except block
@@ -110,7 +124,6 @@ def fit_model(request: FitIn):
         # Add `"message"` key to `response` with error message
         response["message"] = str(e)
 
-
     # Return response
     return response
 
@@ -118,6 +131,31 @@ def fit_model(request: FitIn):
 # `"/predict" path, 200 status code
 @app.post("/predict", status_code=200, response_model=PredictOut)
 def get_prediction(request: PredictIn):
+    """
+    Generates volatility predictions for a given stock using a trained GARCH model.
+
+    Parameters
+    ----------
+    request : PredictIn
+        An instance of the `PredictIn` class with the following attributes:
+
+    - `ticker`: str, ticker symbol of the equity whose volatility will be predicted.
+
+    - `n_days`: int, number of days for which to generate predictions.
+
+    - `use_model`: str, name of the stored model to use for predictions.
+
+    Returns
+    -------
+    dict
+        A dictionary with the following keys:
+
+    - `success`: bool, whether prediction was successful.
+
+    - `forecast`: dict, dictionary containing the predicted volatility values.
+    
+    - `message`: str, message with either the forecast or an error message.
+    """
 
     # Create `response` dictionary from `request`
     response = request.dict()
