@@ -1,113 +1,23 @@
 ### IMPORT PACKAGES
 
-import sqlite3
-from enum import Enum
 from fastapi import FastAPI, HTTPException, status
-from typing import Dict, List, Literal, Optional
-from datetime import date, datetime
 from inspect import cleandoc
+import schemas as scm
 
-from pydantic import BaseModel, Field
 from arch.unitroot import ADF
 from statsmodels.stats.diagnostic import het_arch
 
+from math_helper import calculate_risk_metrics_for_horizon, get_volatility_summary, get_horizon_forecasts
 from data import get_start_date, TwelveDataAPI, get_current_timestamp
 from model import build_model
 
 
-### DATA MODELS
+# ==========================================
+# Math Functions
+# ==========================================
 
-class IdentifierType(str, Enum):
-    ISIN = "isin"
-    TICKER = "ticker"
 
-class WindowPeriod(str, Enum):
-    ONE_YEAR = "1y"
-    THREE_YEAR = "3y"
-    FIVE_YEAR = "5y"
-    
-class ErrorDistribution(str, Enum):
-    NORMAL = "normal"
-    STUDENTS_T = "studentst"
-    SKEWT = "skewt"
-    GED = "ged"
-    
-class Parameters(BaseModel):
-    p: int = Field(default=1, description="Parameter p")
-    q: int = Field(default=1, description="Parameter q")
-    
-class GARCHParameters(BaseModel):
-    p: int = Field(default=1, ge=1, le=5, description="GARCH lag order")
-    q: int = Field(default=1, ge=1, le=5, description="ARCH lag order")
-    
-class DataMetadata(BaseModel):
-    identifier: str
-    start_date: date
-    end_date: date
-    total_observations: int
-    
-class FitQualityMetrics(BaseModel):
-    log_likelihood: float
-    aic: float = Field(..., description="Akaike Information Criterion")
-    bic: float = Field(..., description="Bayesian Information Criterion")
-    converged: bool = Field(..., description="Whether the optimizer reached convergence")
 
-class ParameterEstimate(BaseModel):
-    value: float
-    std_err: Optional[float] = None
-    t_stat: Optional[float] = None
-    p_value: Optional[float] = None
-    
-class FitRequest(BaseModel):
-    identifier: str = Field(
-        ...,
-        examples=["AAPL", "US0378331005"],
-        description="Asset identifier (Ticker or ISIN)",
-    )
-    type: IdentifierType = Field(
-        default=IdentifierType.TICKER,
-        description="Type of the identifier provided",
-    )
-    window_period: WindowPeriod = Field(
-        default=WindowPeriod.THREE_YEAR,
-        description="Historical window used for fetching price data and fitting",
-    )
-    parameters: GARCHParameters = Field(
-        default_factory=GARCHParameters,
-        description="Lag orders for the GARCH(p, q) process",
-    )
-    distribution: ErrorDistribution = Field(
-        default=ErrorDistribution.STUDENTS_T,
-        description="Assumed residual error distribution",
-    )
-    include_coefficients: bool = Field(
-        default=False,
-        description="Whether to include estimated parameter coefficients in the response",
-    )
-    
-class FitSummary(BaseModel):
-    model: str
-    parameters: GARCHParameters
-    distribution: ErrorDistribution
-    trained_at: datetime
-
-class FitResponse(BaseModel):
-    status: Literal["success", "failed"] = "success"
-    name: str = Field(
-        ...,
-        examples=["20260904_140536-ARCH11_AAPL"],
-        description="Artifact identifier formatted as {timestamp}-ARCH{p}{q}_{ticker}",
-    )
-    summary: FitSummary
-    data: DataMetadata
-    metrics: FitQualityMetrics
-    coefficients: Optional[Dict[str, ParameterEstimate]] = Field(
-        default=None,
-        description="Estimated parameters; omitted when include_coefficients is false",
-    )
-  
-class ErrorDetail(BaseModel):
-    detail: str = Field(..., example="Optimizer failed to converge after 500 iterations.")
 
 # Start FastAPI application
 app = FastAPI(title="Financial Econometrics API")
@@ -119,7 +29,7 @@ def hello():
     return {"message" : "Hello, World"}
 
 @app.get("/diagnostics/check", status_code=200)
-def diagnostics(identifier : str, type : IdentifierType = 'ticker', period : WindowPeriod = '3y'):
+def diagnostics(identifier : str, type : scm.IdentifierType = 'ticker', period : scm.WindowPeriod = '3y'):
     """Tests stationarity and ARCH effects on a time-series of equity returns during a specified period."""
     
     response = {
@@ -166,10 +76,9 @@ def diagnostics(identifier : str, type : IdentifierType = 'ticker', period : Win
     return response
 
 
-
 @app.post(
     "/models/fit", 
-    response_model=FitResponse, 
+    response_model=scm.FitResponse, 
     response_model_exclude_none=True,
     status_code=status.HTTP_201_CREATED, 
     operation_id="fit_garch_model",
@@ -218,7 +127,7 @@ def diagnostics(identifier : str, type : IdentifierType = 'ticker', period : Win
             # }
         }
     )
-def fit(payload: FitRequest):
+def fit(payload: scm.FitRequest):
     """Fit a GARCH(p, q) volatility model for a specified financial asset.
 
     Fetches historical daily returns for the given asset identifier across
@@ -230,62 +139,142 @@ def fit(payload: FitRequest):
     period = payload.window_period
     p,q = payload.parameters.p, payload.parameters.q
     dist = payload.distribution.value
+    use_new_data = payload.use_new_data
     
     #Build GARCH Model
     model = build_model(identifier)
-    model.get_daily_returns(period)
+    model.get_daily_returns(period, use_new_data)
     model.fit(p,q,dist)
     
-    model_name, path = model.dump()
-    
+    # GARCH model results
     res = model.model
     
     coefficients_dict=None
     if payload.include_coefficients:
         coefficients_dict = {
-            str(param): ParameterEstimate(
-                value=res.params[param],
-                std_err=getattr(res, "std_err", {}).get(param),
-                t_stat=getattr(res, "tvalues", {}).get(param),
-                p_value=getattr(res, "pvalues", {}).get(param),
+            str(param): scm.ParameterEstimate(
+                value=round(res.params[param], 4),
+                std_err=round(getattr(res, "std_err", {}).get(param), 4),
+                t_stat=round(getattr(res, "tvalues", {}).get(param), 4),
+                p_value=round(getattr(res, "pvalues", {}).get(param), 4),
             )
             for param in res.params.index
         }
+        
+        
+    # Build model artifacts for saviing
+    artifact = {
+                "model_result": res,                           # The ARCHModelResult object
+                "identifier": identifier,                       # e.g., "AAPL"
+                "p": p,                                         # GARCH lag p
+                "q": q,                                         # GARCH lag q
+                "distribution": dist,                           # e.g., "studentst"
+                "trained_at": model.trained_date,                # Training timestamp
+                "last_price_date": model.data.index[-1],   # Cutoff date from data index
+                "data_summary": {
+                    "start_date": model.data.index[0],
+                    "end_date": model.data.index[-1],
+                    "total_observations": len(model.data)
+                }
+            }
     
-    response = FitResponse(
+    # Save model 
+    model_name = model.dump(artifact)
+    
+    # Build response payload
+    response = scm.FitResponse(
         status = 'success',
         name = model_name,
-        summary= FitSummary(
+        summary= scm.FitSummary(
             model = 'GARCH',
-            parameters = GARCHParameters(
+            parameters = scm.GARCHOrder(
                 p = payload.parameters.p,
                 q = payload.parameters.q
             ),
             distribution = payload.distribution.value,
             trained_at = model.trained_date
         ),
-        data = DataMetadata(
+        data = scm.DataMetadata(
             identifier=identifier,
             start_date=model.data.index[0],
             end_date=model.data.index[-1],
             total_observations=len(model.data)
         ),
-        metrics=FitQualityMetrics(
-                    log_likelihood=float(res.loglikelihood),
-                    aic=float(res.aic),
-                    bic=float(res.bic),
+        metrics=scm.FitQualityMetrics(
+                    log_likelihood=round(float(res.loglikelihood), 4),
+                    aic=round(float(res.aic), 4),
+                    bic=round(float(res.bic), 4),
                     converged=bool(res.convergence_flag == 0),
                 ),
         coefficients=coefficients_dict
     )
+    
     return response
+
 
 @app.post(
     "/models/forecast", 
+    response_model=scm.ForecastResponse,
+    response_model_exclude_none=True,
     status_code=200
     )
-def forecast():
-    return {"message" : "This endpoint returns volatility and value-at-risk predictions."}
+def forecast(payload: scm.ForecastRequest):
+    ticker = payload.identifier
+    model_name = payload.use_model
+    annualization_factor = payload.annualization_factor
+    confidence_levels = payload.value_at_risk.confidence_levels
+    portfolio_value = payload.portfolio_value
+    
+    if payload.horizon:
+        max_horizon = max(payload.horizon)
+    else:
+        max_horizon = 1
+    
+    # Load saved model
+    model = build_model(ticker)
+    artifact = model.load(model_name)
+    
+    res = artifact['model_result']
+    dist_name = artifact['distribution']
+    last_price_date = artifact['last_price_date']
+    
+    # Forecast daily conditional volatility
+    forecasts = res.forecast(horizon=max_horizon, reindex=False)
+    daily_variances = forecasts.variance.values[-1]
+
+    volatility_summary = get_volatility_summary(res, annualization_factor)
+    risk_summary = calculate_risk_metrics_for_horizon(volatility_summary.conditional_next_day, 
+                                    confidence_levels, 
+                                    portfolio_value,
+                                    dist_name,
+                                    res.params)
+    
+    horizon_forecasts = get_horizon_forecasts(payload, res, daily_variances, dist_name, last_price_date) if payload.horizon else None
+    
+    response = scm.ForecastResponse(
+        status = 'success',
+        portfolio_value=portfolio_value,
+        summary=scm.ForecastSummary(
+            volatility=volatility_summary,
+            risk=risk_summary
+        ),
+        horizon_forecasts=horizon_forecasts,
+        model_spec = scm.ModelSpec(
+                    model_name = artifact['model_name'],
+                    model_type = "GARCH",
+                    order = scm.GARCHOrder(
+                        p = artifact['p'],
+                        q = artifact['q']
+                    ),
+                    distribution = dist_name,
+                    trained_at = artifact['trained_at'],
+                    data = scm.ModelSpecData(
+                        identifier=ticker,
+                        last_price_date=last_price_date
+                    )
+                )
+    )
+    return response
 
 # @app.get("/models", status_code=200)
 # def list_models():

@@ -3,7 +3,6 @@ import sqlite3
 from glob import glob
 
 import pickle
-import joblib
 import pandas as pd
 import numpy as np
 from arch import arch_model
@@ -62,20 +61,25 @@ class GarchModel():
         self.ticker = ticker
         self.repo = repo
         self.model_directory = settings.model_directory
-
-    def get_daily_returns(self, period: str = "3y") -> pd.Series:
+        
+    def _check_cache(self, start_date_str: str):
+        '''
+        Checks cache and returns cached data if valid, otherwise None
+        '''
         identifier = self.ticker
         connection = self.repo
-        start_date_str = get_start_date(period)
-        req_start_date = pd.to_datetime(start_date_str)
-        latest_expected_date = get_latest_expected_eod().strftime("%Y-%m-%d")
-
+        
+        earliest_expected_date = pd.to_datetime(start_date_str)
+        latest_expected_date = get_latest_expected_eod()
+        end_date_str = latest_expected_date.strftime("%Y-%m-%d")
+        
+        # Set df to None by default
         df = None
-
+        
         # 1. Try reading from SQLite cache
         try:
             cached_df = connection.read_table(
-                identifier, start_date_str, latest_expected_date
+                identifier, start_date_str, end_date_str
             )
             if not cached_df.empty:
                 # Normalize index to DatetimeIndex for accurate date comparison
@@ -83,21 +87,83 @@ class GarchModel():
                     cached_df.index = pd.to_datetime(cached_df.index)
 
                 # Check if the cache covers the full requested lookback period
-                # Allowing a small 5-day grace window for weekends/holidays
                 earliest_cached = cached_df.index.min()
-                if earliest_cached <= (req_start_date + pd.Timedelta(days=5)):
+                latest_cached = cached_df.index.max()
+                
+                is_start_valid = earliest_cached <= earliest_expected_date 
+                is_end_valid = latest_cached >= latest_expected_date
+                
+                if is_start_valid and is_end_valid:
                     df = cached_df
                 else:
+                    reason = []
+                    if not is_start_valid:
+                        reason.append("start date incomplete")
+                    if not is_end_valid:
+                        reason.append("end date incomplete/stale")
                     print(
-                        f"[Cache Incomplete] Requested start: {req_start_date.date()}, "
-                        f"earliest cached: {earliest_cached.date()}. Fetching fresh data..."
+                        f"[Cache Incomplete ({', '.join(reason)})] "
+                        f"Requested range: {earliest_expected_date.date()} to {latest_expected_date.date()}, "
+                        f"cached range: {earliest_cached.date()} to {latest_cached.date()}. "
+                        f"Fetching fresh data..."
                     )
         except (ValueError, Exception) as exc:
             print(f"[Cache Miss] {exc}. Fetching from API...")
+        
+        return df
+        
+
+    def get_daily_returns(self, period: str = "3y", use_new_data=False) -> pd.Series:
+        identifier = self.ticker
+        connection = self.repo
+        start_date_str = get_start_date(period)
+        earliest_expected_date = pd.to_datetime(start_date_str)
+        latest_expected_date = get_latest_expected_eod()
+        end_date_str = latest_expected_date.strftime("%Y-%m-%d")
+
+        df = None
+        
+        if not use_new_data:
+            # 1. Try reading from SQLite cache
+            try:
+                cached_df = connection.read_table(
+                    identifier, start_date_str, end_date_str
+                )
+                if not cached_df.empty:
+                    # Normalize index to DatetimeIndex for accurate date comparison
+                    if not isinstance(cached_df.index, pd.DatetimeIndex):
+                        cached_df.index = pd.to_datetime(cached_df.index)
+
+                    # Check if the cache covers the full requested lookback period
+                    earliest_cached = cached_df.index.min()
+                    latest_cached = cached_df.index.max()
+                    
+                    is_start_valid = earliest_cached <= earliest_expected_date 
+                    is_end_valid = latest_cached >= latest_expected_date
+                    
+                    if is_start_valid and is_end_valid:
+                        df = cached_df
+                    else:
+                        reason = []
+                        if not is_start_valid:
+                            reason.append("start date incomplete")
+                        if not is_end_valid:
+                            reason.append("end date incomplete/stale")
+                        print(
+                            f"[Cache Incomplete ({', '.join(reason)})] "
+                            f"Requested range: {earliest_expected_date.date()} to {latest_expected_date.date()}, "
+                            f"cached range: {earliest_cached.date()} to {latest_cached.date()}. "
+                            f"Fetching fresh data..."
+                        )
+            except (ValueError, Exception) as exc:
+                print(f"[Cache Miss] {exc}. Fetching from API...")
+        
 
         # 2. Fetch from API if cache was missing or incomplete
         if df is None or df.empty:
+            # Initialize TwelveDataAPI object
             api = TwelveDataAPI()
+            
             # Ensure idType gets the proper string (e.g. self.id_type or 'ticker'), not the built-in `type`
             id_type = getattr(self, "id_type", "ticker")
             df = api.fetch_data_from_api(
@@ -113,7 +179,7 @@ class GarchModel():
 
         # 4. Filter to exact requested window
         df = df.loc[
-            (df.index >= req_start_date)
+            (df.index >= earliest_expected_date)
             & (df.index <= pd.to_datetime(latest_expected_date))
         ].copy()
 
@@ -128,7 +194,7 @@ class GarchModel():
         log_returns = np.log(df["close"] / df["close"].shift(1)).dropna()
 
         self.data = log_returns
-        return self.data
+        return
 
     def fit(self, p, q, dist):
 
@@ -233,7 +299,7 @@ class GarchModel():
         return prediction_formatted
 
 
-    def dump(self):
+    def dump(self, artifact):
 
         """Save model to `self.model_directory` with timestamp.
 
@@ -245,46 +311,49 @@ class GarchModel():
         # Create timestamp in ISO format
         # timestamp = pd.Timestamp.now().isoformat()
         timestamp = pd.Timestamp.now().strftime("%Y-%m-%dT%H-%M-%S.%f")
-        
+    
         # Create filepath, including `self.model_directory`
-        name = f"{timestamp}-GARCH{self.p}{self.q}_{self.ticker}"
-        filepath = os.path.join(self.model_directory, f"{name}.pkl")
+        model_name = f"{timestamp}-GARCH{self.p}{self.q}_{self.ticker}"
+        file_path = os.path.join(self.model_directory, f"{model_name}.pkl")
         
-        # # Save `self.model`
-        # joblib.dump(self.model, filepath)
-        with open(filepath, "wb") as f:
-            pickle.dump(self.model, f)
+        # Add model_name to artifact
+        artifact['model_name'] = model_name
+
+        with open(file_path, "wb") as f:
+            pickle.dump(artifact, f, protocol=pickle.HIGHEST_PROTOCOL)
 
         # Return name and filepath
-        return name, filepath
+        return model_name
     
 
-    def load(self, use_model):
+    def load(self, model_name):
 
         """Load most recent model in `self.model_directory` for `self.ticker`,
         attach to `self.model` attribute.
 
         """
-        # Create pattern for glob search
-        pattern = os.path.join(settings.model_directory, f"*{self.ticker}.pkl")
-        # Use glob to get most recent model, handle errors
-        try:
-            if use_model == "latest":
-                model_path = sorted(glob(pattern))[-1]
-            else:
-                model_path = os.path.join(settings.model_directory, f"{use_model}.pkl")
-        except IndexError:
-            raise Exception(f"No model trained for '{self.ticker}'")
+        MODEL_STORE_DIR = settings.model_directory
         
-        # Load model and attach to `self.model`
-        # self.model = joblib.load(model_path)
-        with open(model_path, 'rb') as f:
-            self.model = pickle.load(f)
-        
-        self.model_name = model_path
-        print(f"Loaded model from {model_path}")
+        if model_name == "latest":
+            if not os.path.exists(MODEL_STORE_DIR):
+                raise FileNotFoundError("Model storage directory does not exist.")
+            files = [f for f in os.listdir(MODEL_STORE_DIR) if f.endswith(".pkl")]
+            if not files:
+                raise FileNotFoundError("No fitted model artifacts found.")
+            model_name = sorted(files)[-1].replace(".pkl", "")
 
-        return self.model
+        file_path = os.path.join(MODEL_STORE_DIR, f"{model_name}.pkl")
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Model artifact '{model_name}' not found.")
+
+        with open(file_path, "rb") as f:
+            artifact = pickle.load(f)
+
+        self.model = artifact['model_result']
+        self.name = model_name
+        print(f"Loading {model_name} success!")
+        
+        return artifact
 
         
     

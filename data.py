@@ -20,9 +20,10 @@ def get_start_date(period):
     return startDate
 
 def get_latest_expected_eod() -> pd.Timestamp:
+    # Get the current timestamp at target exchange timezone
     now_tz = pd.Timestamp.now(tz=settings.exchange_tz)
     
-    # If it's before 5:00 PM Eastern, the latest completed EOD bar is from the previous business day
+    # If it's before eod_available_hour=17:00 (usual end of trading day), the latest completed EOD bar is from the previous business day
     if now_tz.hour < settings.eod_available_hour:
         expected = now_tz - pd.tseries.offsets.BDay(1)
     else:
