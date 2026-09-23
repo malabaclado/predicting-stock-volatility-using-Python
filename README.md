@@ -1,4 +1,4 @@
-# Predicting Stock Volatility & Tail Risk using GARCH and FastAPI
+# Financial Time-Series Volatility and Value-at-Risk Forecasting API
 
 This repository delivers a production-grade, mathematically rigorous framework for predicting equity volatility and estimating portfolio tail-risk (Value-at-Risk and Expected Shortfall). 
 
