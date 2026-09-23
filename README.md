@@ -261,5 +261,6 @@ $$\text{ES}_\alpha(Z) = -\frac{\phi(z_\alpha)}{\alpha}$$
 where $\phi$ is the standard Normal PDF and $z_\alpha$ is the normal quantile. 
 
 Under Student's t-distribution standardized to unit-variance, the conditional ES is:
+
 $$\text{ES}_\alpha(Z) = -\left(\frac{\nu + t_\alpha^2}{\nu - 1}\right) \frac{f(t_\alpha)}{\alpha} \times \sqrt{\frac{\nu - 2}{\nu}}$$
 where $f$ is the Student's t PDF, $t_\alpha$ is the Student's t quantile, and $\nu$ is the degrees of freedom.
