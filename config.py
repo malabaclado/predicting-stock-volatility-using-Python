@@ -25,7 +25,8 @@ class Settings(BaseSettings):
     alpha_api_key: str
     alpha_api_key2: str
     twelve_data_api_key: str
-    db_name: str
+    data_db_name: str
+    models_db_name: str
     model_directory: str
     exchange_tz: str
     eod_available_hour: int

@@ -45,7 +45,7 @@ class TwelveDataAPI:
     def __init__(self):
         self.__api_key = settings.twelve_data_api_key
 
-    def fetch_data_from_api(self, identifier, start_date, idType="ticker"):
+    def fetch_data_from_api(self, ticker: str, start_date: str) -> pd.DataFrame:
     
         """Get daily time series of an equity from Twelve Data API.
 
@@ -53,12 +53,8 @@ class TwelveDataAPI:
         ----------
         ticker : str
             The ticker symbol of the equity.
-        period : str, optional
-            Lookback period for the time series data. Options are "1y",
-            "3y", and "5y". By default "5y".
-        interval : str, optional
-            Time interval between two consecutive data points.
-            By default "1day".
+        start_date : str
+            Start date for the time series data (YYYY-MM-DD).
 
         Returns
         -------
@@ -66,10 +62,10 @@ class TwelveDataAPI:
             Columns are 'open', 'high', 'low', 'close', and 'volume'.
             All columns are numeric.
         """
-        
+        ticker_clean = ticker.strip().upper()
         url = (
             "https://api.twelvedata.com/time_series?"
-            f"{'symbol' if idType == 'ticker' else 'isin'}={identifier}&"
+            f"symbol={ticker_clean}&"
             f"interval=1day&"
             f"start_date={start_date}&"
             f"apikey={self.__api_key}"

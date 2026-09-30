@@ -1,11 +1,7 @@
 from enum import Enum
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator, AliasChoices
 from typing import Dict, List, Literal, Optional
 from datetime import date, datetime
-
-class IdentifierType(str, Enum):
-    ISIN = "isin"
-    TICKER = "ticker"
 
 class WindowPeriod(str, Enum):
     ONE_YEAR = "1y"
@@ -21,10 +17,16 @@ class GARCHOrder(BaseModel):
     q: int = Field(default=1, ge=1, le=5, description="ARCH lag order")
     
 class DataMetadata(BaseModel):
-    identifier: str
+    ticker: str = Field(
+        ...,
+        examples=["AAPL"],
+        description="Asset ticker symbol",
+        validation_alias=AliasChoices("ticker", "identifier")
+    )
     start_date: date
-    end_date: date
+    end_date: date    
     total_observations: int
+    window_period: WindowPeriod
     
 class FitQualityMetrics(BaseModel):
     log_likelihood: float
@@ -40,20 +42,162 @@ class ParameterEstimate(BaseModel):
     
 class ErrorDetail(BaseModel):
     detail: str = Field(..., example="Optimizer failed to converge after 500 iterations.")
+    
+class ModelSpecData(BaseModel):
+    ticker: str = Field(
+        ...,
+        examples=["AAPL"],
+        description="The asset ticker symbol",
+        validation_alias=AliasChoices("ticker", "identifier")
+    )
+    last_price_date: date = Field(..., description="The cutoff date of the historical pricing data used")
+
+class ModelSpec(BaseModel):
+    model_name: str = Field(..., description="The unique name of the fitted model artifact used")
+    model_type: Literal["GARCH"] = Field(default="GARCH", description="The class of volatility model")
+    order: GARCHOrder = Field(..., description="Lag orders of the GARCH model")
+    distribution: str = Field(..., description="The error distribution assumed by the model (e.g. normal, studentst)")
+    trained_at: datetime = Field(..., description="Timestamp of when the model was trained")
+    data: DataMetadata = Field(..., description="Metadata about the underlying data used by the model")
+
+
+# ==========================================
+# Schemas for /model/search
+# ==========================================
+
+class DateRangeFilter(BaseModel):
+    start: Optional[date] = Field(
+        default=None,
+        description="Filter models trained on or after this date (inclusive).",
+        examples=["2026-01-01"],
+    )
+    end: Optional[date] = Field(
+        default=None,
+        description="Filter models trained on or before this date (inclusive).",
+        examples=["2026-09-30"],
+    )
+    
+    @model_validator(mode="after")
+    def validate_range(self) -> "DateRangeFilter":
+        if self.start and self.end and self.start > self.end:
+            raise ValueError("start date cannot be after end date.")
+        return self
+
+class PersistenceRangeFilter(BaseModel):
+    min: Optional[float] = Field(
+        default=0.0,
+        ge=0.0,
+        description="Minimum persistence (alpha + beta). Default is 0.0.",
+        examples=[0.0],
+    )
+    max: Optional[float] = Field(
+        default=0.999,
+        ge=0.0,
+        description="Maximum persistence (alpha + beta). Default is 0.999 (stationary limit).",
+        examples=[0.999],
+    )
+    
+    @model_validator(mode="after")
+    def validate_range(self) -> "PersistenceRangeFilter":
+        if self.min is not None and self.max is not None and self.min > self.max:
+            raise ValueError("min persistence cannot be greater than max persistence.")
+        return self
+
+
+class ModelSearchRequest(BaseModel):
+    ticker: Optional[str] = Field(
+        default=None,
+        description="Asset identifier ticker (case-insensitive filter).",
+        examples=["AAPL"]
+    )
+    converged: Optional[bool] = Field(
+        default=True,
+        description="Filter by model optimizer convergence status.",  
+    )
+    trained_at: DateRangeFilter = Field(
+        default_factory=DateRangeFilter,
+        description="Date range filter for when the model was trained.",
+    )
+    persistence: PersistenceRangeFilter = Field(
+        default_factory=PersistenceRangeFilter,
+        description="Filter by volatility persistence (sum of ARCH/GARCH coefficients).",
+    )
+    distribution: Optional[ErrorDistribution] = Field(
+        default=ErrorDistribution.STUDENTS_T,
+        description="Filter by error distribution assumption. If omitted, matches all distributions.",
+    )
+    window_period: Optional[WindowPeriod] = Field(
+        default = WindowPeriod.THREE_YEAR,
+        description="Period of the training data.",
+    )
+    limit: int = Field(
+        ...,
+        ge=1,
+        le=200,
+        description="Maximum number of model metadata records to return (minimum=1, maximum=200).",
+        examples=[10],
+    )
+    sort_by: Literal["aic", "bic", "trained_at", "persistence"] = Field(
+        ...,
+        description="Metric or timestamp to sort records by.",
+        examples=['trained_at'],
+    )
+    order_by: Optional[Literal["asc", "desc"]] = Field(
+        default=None,
+        description="Sort direction. If omitted, defaults to 'asc' for aic/bic and 'desc' for trained_at/persistence.",
+    )
+
+    @model_validator(mode="after")
+    def set_default_order_by_and_sanitize(self) -> "ModelSearchRequest":
+        # 1. Clean ticker casing if supplied
+        if self.ticker:
+            self.ticker = self.ticker.strip().upper()
+
+        # 2. Dynamic default for order_by based on financial intuition
+        if self.order_by is None:
+            if self.sort_by in ("aic", "bic"):
+                # Lower AIC/BIC indicates superior model fit
+                self.order_by = "asc"
+            else:
+                # Latest models or highest persistence first
+                self.order_by = "desc"
+
+        return self
+    
+class ModelMetrics(BaseModel):
+    aic: float = Field(..., description="Akaike Information Criterion.")
+    bic: float = Field(..., description="Bayesian Information Criterion.")
+    persistence: float = Field(
+        ...,
+        description="Sum of ARCH and GARCH parameters (alpha + beta).",
+        examples=[0.9652],
+    )
+    converged: bool = Field(
+        ...,
+        description="Whether the numerical optimizer converged successfully.",
+    )
+
+class ModelSpecsWithMetrics(ModelSpec):
+    metrics: ModelMetrics
+    
+
+class ModelSearchResponse(BaseModel):
+    search_results: List[ModelSpecsWithMetrics]
+    total: int = Field(
+        ...,
+        description="Total number of search results"
+    )
 
 # ==========================================
 # Schemas for /model/fit
 # ==========================================
 
 class FitRequest(BaseModel):
-    identifier: str = Field(
+    ticker: str = Field(
         ...,
-        examples=["AAPL", "US0378331005"],
-        description="Asset identifier (Ticker or ISIN)",
-    )
-    type: IdentifierType = Field(
-        default=IdentifierType.TICKER,
-        description="Type of the identifier provided",
+        examples=["AAPL"],
+        description="Asset ticker symbol",
+        validation_alias=AliasChoices("ticker", "identifier"),
     )
     window_period: WindowPeriod = Field(
         default=WindowPeriod.THREE_YEAR,
@@ -76,6 +220,11 @@ class FitRequest(BaseModel):
         default=False,
         description="Whether to include estimated parameter coefficients in the response",
     )
+
+    @field_validator("ticker")
+    @classmethod
+    def sanitize_ticker(cls, v: str) -> str:
+        return v.strip().upper()
     
 class FitSummary(BaseModel):
     model: str
@@ -124,20 +273,22 @@ class VaRConfig(BaseModel):
         return clean_levels
 
 class ForecastRequest(BaseModel):
-    identifier: str = Field(
-            ...,
-            examples=["AAPL", "US0378331005"],
-            description="Asset identifier (Ticker or ISIN)",
-        )
-    type: IdentifierType = Field(
-            default=IdentifierType.TICKER,
-            description="Type of the identifier provided",
-        )
+    ticker: str = Field(
+        ...,
+        examples=["AAPL"],
+        description="Asset ticker symbol",
+        validation_alias=AliasChoices("ticker", "identifier"),
+    )
     use_model: str = Field(
         default="latest",
         examples=["latest", "2026-09-05T20-03-05.076395-GARCH11_AAPL"],
         description="Use a specific model from saved models. Defaults to 'latest'.",
     )
+
+    @field_validator("ticker")
+    @classmethod
+    def sanitize_ticker(cls, v: str) -> str:
+        return v.strip().upper()
     horizon: Optional[List[int]] = Field(
         default=None,
         examples=[[1,5,20,60]],
@@ -175,18 +326,6 @@ class ForecastRequest(BaseModel):
             raise ValueError("Horizon cannot exceed 252 trading days.")
         return clean_horizons
 
-
-class ModelSpecData(BaseModel):
-    identifier: str = Field(..., description="The asset identifier (e.g. ticker or ISIN)")
-    last_price_date: date = Field(..., description="The cutoff date of the historical pricing data used")
-
-class ModelSpec(BaseModel):
-    model_name: str = Field(..., description="The unique name of the fitted model artifact used")
-    model_type: Literal["GARCH"] = Field(default="GARCH", description="The class of volatility model")
-    order: GARCHOrder = Field(..., description="Lag orders of the GARCH model")
-    distribution: str = Field(..., description="The error distribution assumed by the model (e.g. normal, studentst)")
-    trained_at: datetime = Field(..., description="Timestamp of when the model was trained")
-    data: ModelSpecData = Field(..., description="Metadata about the underlying data used by the model")
 
 class VolatilitySummary(BaseModel):
     conditional_next_day: float = Field(..., description="1-day ahead forecast daily conditional volatility (percentage units)")

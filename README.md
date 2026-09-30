@@ -2,13 +2,13 @@
 
 This repository delivers a production-grade, mathematically rigorous framework for predicting equity volatility and estimating portfolio tail-risk (Value-at-Risk and Expected Shortfall). 
 
-The application retrieves historical daily stock prices from the **Twelve Data API**, synchronizes records with a local **SQLite database cache**, fits an autoregressive conditional heteroskedasticity (**GARCH**) model via the `arch` library, and exposes high-performance statistical diagnostics and forecasting endpoints via **FastAPI**.
+The application retrieves historical daily stock prices from the **Twelve Data API**, synchronizes records with a local **SQLite database cache (`market_data.sqlite`)**, fits an autoregressive conditional heteroskedasticity (**GARCH**) model via the `arch` library, records model metadata and performance metrics in a registry database (**`models.sqlite`**), and exposes high-performance statistical diagnostics and forecasting endpoints via **FastAPI**.
 
 ---
 
 ## 🚀 Key Features
 
-### 1. Advanced Econometric Modeling & Volatility Forecasting
+### 1.  Econometric Modeling & Volatility Forecasting
 * **Dynamic Conditional Variance:** Fits a GARCH(p, q) model (with `Zero` mean configuration) to capture volatility clustering and leverage effects in historical log returns.
 * **Non-Constant Variance Term-Structure:** Projects multi-period conditional variance by dynamically iterating and aggregating expected daily variances ($\sum_{k=1}^h \sigma^2_{t+k}$), capturing the natural mean-reversion of the GARCH process over longer holding periods.
 
@@ -21,16 +21,20 @@ The application retrieves historical daily stock prices from the **Twelve Data A
 * **Stationarity Testing:** Employs the Augmented Dickey-Fuller (**ADF**) unit root test via `arch.unitroot` to verify stationarity of log returns.
 * **Heteroskedasticity Testing:** Implements Engle’s Lagrange Multiplier (**LM**) test via `statsmodels` to confirm the presence of ARCH effects before fitting models.
 
-### 4. Enterprise-Grade Hybrid Data Ingestion & Caching
+### 4. Persistent Model Registry & Search
+* **Cataloged Model Metadata:** Automatically logs every fitted model into the SQLite `models` table (`models.sqlite`) with AIC, BIC, persistence ($\alpha + \beta$), convergence status, and training date.
+* **Multi-Criteria Search Endpoint:** Query saved models by ticker, convergence, date ranges, persistence thresholds, or distribution, with sorting by AIC, BIC, persistence, or training timestamp.
+
+### 5. Enterprise-Grade Hybrid Data Ingestion & Caching
 * **Timezone-Aware Scheduling:** Localizes all times to the New York exchange clock (`America/New_York`) and automatically rolls back requests if the current market is open but today's EOD data is not yet finalized (typically 5:00 PM Eastern).
-* **Double-Ended Caching Checks:** Validates local database records on both ends of the lookback window using a 5-day grace window for holidays/weekends. This avoids redundant, slow API calls while guaranteeing that users never train models on stale or incomplete data.
+* **Double-Ended Caching Checks:** Validates local database records on both ends of the lookback window using a grace window for holidays/weekends. This avoids redundant, slow API calls while guaranteeing that users never train models on stale or incomplete data.
 
 ---
 
 ## 🛠️ Installation & Setup
 
 ### Prerequisites
-* **Python 3.8+** or **Docker Desktop**
+* **Python 3.10+** or **Docker Desktop**
 * **Twelve Data API Key:** Get a free API key from [twelvedata.com](https://twelvedata.com/).
 
 ### 1. Configuration
@@ -40,7 +44,7 @@ The application retrieves historical daily stock prices from the **Twelve Data A
    cd predicting-stock-volatility-using-Python
    ```
 2. Set up your environment file:
-   Copy `.sample.env` to `.env` and fill in your API key:
+   Copy `.sample.env` to `.env` and fill in your API key and configuration:
    ```bash
    cp .sample.env .env
    ```
@@ -49,15 +53,22 @@ The application retrieves historical daily stock prices from the **Twelve Data A
    TWELVE_DATA_API_KEY=your_actual_api_key_here
    ```
 
-### 2. Running with Docker Compose (Recommended)
+### 2. Running Locally with Python
+```bash
+pip install -r requirements.txt
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+Navigate to [http://localhost:8000/docs](http://localhost:8000/docs) for the interactive Swagger documentation.
+
+### 3. Running with Docker Compose (Recommended)
 Docker Compose spins up the FastAPI web service and a Jupyter Notebook environment concurrently:
 ```bash
 docker compose up
 ```
 * **API Swagger Docs:** Navigate to [http://localhost:8000/docs](http://localhost:8000/docs)
-* **Jupyter Notebook Demo:** Navigate to [http://localhost:8888](http://localhost:8888) and explore `project-demo.ipynb` using the token shown in your terminal.
+* **Jupyter Notebook Demo:** Navigate to [http://localhost:8888](http://localhost:8888) and explore `project-demo.ipynb`.
 
-### 3. Running with Docker Build
+### 4. Running with Docker Build
 If you only want to build and run the FastAPI server:
 ```bash
 docker build -t garch-api .
@@ -68,39 +79,29 @@ docker run -p 8000:8000 garch-api
 
 ## 📡 API Usage Guide
 
-### 1. `GET /hello`
-A simple healthcheck endpoint.
-* **Response:**
-  ```json
-  {"message": "Hello, World"}
-  ```
+### 1. `GET /diagnostics/check`
+Tests historical returns for stationarity (ADF test) and conditional heteroskedasticity (Engle's ARCH LM test) to verify if the equity time series is mathematically suitable for GARCH modeling.
 
----
-
-### 2. `GET /diagnostics/check`
-Tests historical returns for stationarity and conditional heteroskedasticity (ARCH effects) to verify if the asset is mathematically suitable for GARCH modeling.
 * **Query Parameters:**
-  * `identifier` (string, required): Ticker symbol (e.g. `AAPL`) or ISIN.
-  * `type` (string, default: `ticker`): `ticker` or `isin`.
+  * `ticker` (string, required): Equity ticker symbol (e.g. `AAPL`).
   * `period` (string, default: `3y`): Lookback period (`1y`, `3y`, or `5y`).
 * **Example Request:**
   ```http
-  GET /diagnostics/check?identifier=AAPL&period=3y
+  GET /diagnostics/check?ticker=AAPL&period=3y
   ```
 * **Sample Response:**
   ```json
   {
-    "id": "AAPL",
-    "type": "ticker",
+    "ticker": "AAPL",
     "date": {
-      "start": "2023-09-23",
-      "end": "2026-09-23"
+      "start": "2023-10-02",
+      "end": "2026-09-29"
     },
     "data": {
       "is_stationary": true,
       "has_arch_effects": true,
-      "adf_pvalue": 0.000012,
-      "arch_lm_pvalue": 0.000451,
+      "adf_pvalue": 8.88e-26,
+      "arch_lm_pvalue": 5.14e-21,
       "recommendation": "Proceed with GARCH(1,1)"
     }
   }
@@ -108,19 +109,74 @@ Tests historical returns for stationarity and conditional heteroskedasticity (AR
 
 ---
 
-### 3. `POST /models/fit`
-Fits a GARCH(p,q) model on historical daily log returns and serializes the trained model artifact to disk.
+### 2. `POST /model/search`
+Searches and filters saved model artifacts cataloged in the SQLite registry (`models.sqlite`) based on performance metrics, training dates, and convergence.
+
 * **Payload Structure:**
-  * `identifier` (string): Asset symbol (e.g., `AAPL`).
-  * `window_period` (string, default: `3y`): Historical window (`1y`, `3y`, or `5y`).
-  * `parameters` (object): Configures `p` and `q` lags (e.g., `{"p": 1, "q": 1}`).
-  * `distribution` (string, default: `normal`): Loss distribution (`normal` or `studentst`).
-  * `use_new_data` (boolean, default: `false`): Force bypass the SQLite cache and pull fresh data from the API.
-  * `include_coefficients` (boolean, default: `true`): Return parameter coefficients with standard errors and t-stats in the response.
+  * `ticker` (string, optional): Filter by equity ticker (e.g. `"AAPL"`).
+  * `converged` (boolean, default: `true`): Filter by optimizer convergence status.
+  * `trained_at` (object, optional): Date range filter (`{"start": "2026-01-01", "end": "2026-09-30"}`).
+  * `persistence` (object, optional): Volatility persistence range (`{"min": 0.0, "max": 0.999}`).
+  * `distribution` (string, default: `studentst`): Error distribution filter (`normal` or `studentst`).
+  * `window_period` (string, default: `3y`): Lookback period (`1y`, `3y`, or `5y`).
+  * `limit` (integer, required): Maximum number of records to return (1 to 200).
+  * `sort_by` (string, required): Sorting attribute (`"aic"`, `"bic"`, `"trained_at"`, `"persistence"`).
+  * `order_by` (string, optional): `"asc"` or `"desc"` (defaults to `"asc"` for aic/bic and `"desc"` for trained_at/persistence).
 * **Example Request:**
   ```json
   {
-    "identifier": "AAPL",
+    "ticker": "AAPL",
+    "converged": true,
+    "distribution": "studentst",
+    "limit": 5,
+    "sort_by": "aic"
+  }
+  ```
+* **Sample Response Body:**
+  ```json
+  {
+    "search_results": [
+      {
+        "model_name": "2026-09-30T10-47-01.396909-GARCH11_AAPL",
+        "model_type": "GARCH",
+        "order": { "p": 1, "q": 1 },
+        "distribution": "studentst",
+        "trained_at": "2026-09-30",
+        "data": {
+          "ticker": "AAPL",
+          "start_date": "2023-10-02",
+          "end_date": "2026-09-29",
+          "total_observations": 750,
+          "window_period": "3y"
+        },
+        "metrics": {
+          "aic": 2705.6937,
+          "bic": 2724.174,
+          "persistence": 0.7959,
+          "converged": true
+        }
+      }
+    ],
+    "total": 1
+  }
+  ```
+
+---
+
+### 3. `POST /models/fit`
+Fits a GARCH(p,q) volatility model on historical daily log returns, dumps the artifact (`.pkl`) to disk, and records its metadata into `models.sqlite`.
+
+* **Payload Structure:**
+  * `ticker` (string, required): Asset ticker symbol (e.g., `AAPL`).
+  * `window_period` (string, default: `3y`): Historical window (`1y`, `3y`, or `5y`).
+  * `parameters` (object): Configures `p` and `q` lags (e.g., `{"p": 1, "q": 1}`).
+  * `distribution` (string, default: `studentst`): Error distribution (`normal` or `studentst`).
+  * `use_new_data` (boolean, default: `false`): Force bypass the SQLite cache and pull fresh data from the API.
+  * `include_coefficients` (boolean, default: `false`): Return parameter estimates with standard errors and t-stats.
+* **Example Request:**
+  ```json
+  {
+    "ticker": "AAPL",
     "window_period": "3y",
     "parameters": { "p": 1, "q": 1 },
     "distribution": "studentst",
@@ -132,29 +188,31 @@ Fits a GARCH(p,q) model on historical daily log returns and serializes the train
   ```json
   {
     "status": "success",
-    "name": "2026-09-23T17-30-00.123456-GARCH11_AAPL",
+    "name": "2026-09-30T10-47-01.396909-GARCH11_AAPL",
     "summary": {
       "model": "GARCH",
       "parameters": { "p": 1, "q": 1 },
       "distribution": "studentst",
-      "trained_at": "2026-09-23T17:30:00.123456"
+      "trained_at": "2026-09-30 10:47:01.396909"
     },
-    "data_summary": {
-      "start_date": "2023-09-25",
-      "end_date": "2026-09-22",
-      "total_observations": 754
+    "data": {
+      "ticker": "AAPL",
+      "start_date": "2023-10-02",
+      "end_date": "2026-09-29",
+      "total_observations": 750,
+      "window_period": "3y"
     },
     "metrics": {
-      "log_likelihood": 2245.81,
-      "aic": -4481.62,
-      "bic": -4458.5,
+      "log_likelihood": -1348.8469,
+      "aic": 2705.6937,
+      "bic": 2724.174,
       "converged": true
     },
     "coefficients": {
-      "mu": { "value": 0.00084, "std_err": 0.00038, "t_stat": 2.21, "p_value": 0.027 },
-      "omega": { "value": 0.000012, "std_err": 0.000004, "t_stat": 3.0, "p_value": 0.0027 },
-      "alpha[1]": { "value": 0.085, "std_err": 0.019, "t_stat": 4.47, "p_value": 0.00001 },
-      "beta[1]": { "value": 0.865, "std_err": 0.028, "t_stat": 30.89, "p_value": 0.0 }
+      "omega": { "value": 0.3642, "std_err": 0.1741, "t_stat": 2.0915, "p_value": 0.0365 },
+      "alpha[1]": { "value": 0.1333, "std_err": 0.0949, "t_stat": 1.4042, "p_value": 0.1603 },
+      "beta[1]": { "value": 0.6626, "std_err": 0.294, "t_stat": 2.2539, "p_value": 0.0242 },
+      "nu": { "value": 3.4885, "std_err": 0.4573, "t_stat": 7.6282, "p_value": 0.0 }
     }
   }
   ```
@@ -163,21 +221,22 @@ Fits a GARCH(p,q) model on historical daily log returns and serializes the train
 
 ### 4. `POST /models/forecast`
 Generates next-day and multi-horizon volatility predictions, alongside parametric Value-at-Risk and Expected Shortfall forecasts.
+
 * **Payload Structure:**
-  * `identifier` (string): Asset symbol (e.g., `AAPL`).
-  * `use_model` (string, default: `latest`): A specific model filename or `latest` to load the most recent fitted model.
-  * `portfolio_value` (float, default: `10000.0`): Portfolio position size in nominal terms.
-  * `annualization_factor` (integer, default: `252`): Base factor (e.g., `252` for equities, `365` for crypto).
-  * `horizon` (list of integers, optional): Holding periods in trading days (e.g., `[1, 5, 20, 60]`).
+  * `ticker` (string, required): Asset ticker symbol (e.g., `AAPL`).
+  * `use_model` (string, default: `latest`): Specific model artifact name or `latest` to use the most recent fitted model.
+  * `portfolio_value` (float, default: `10000.0`): Portfolio position size in nominal account currency.
+  * `annualization_factor` (integer, default: `252`): Base trading days multiplier (e.g., `252` for equities).
+  * `horizon` (list of integers, optional): Holding periods in trading days (e.g., `[1, 5, 20]`).
   * `value_at_risk` (object): Configures confidence thresholds (e.g., `{"confidence_levels": [0.95, 0.99]}`).
 * **Example Request:**
   ```json
   {
-    "identifier": "AAPL",
+    "ticker": "AAPL",
     "use_model": "latest",
-    "portfolio_value": 1000000.0,
+    "portfolio_value": 50000.0,
     "annualization_factor": 252,
-    "horizon": [5, 20],
+    "horizon": [1, 5, 20],
     "value_at_risk": {
       "confidence_levels": [0.95, 0.99]
     }
@@ -187,54 +246,71 @@ Generates next-day and multi-horizon volatility predictions, alongside parametri
   ```json
   {
     "status": "success",
-    "portfolio_value": 1000000.0,
+    "portfolio_value": 50000.0,
     "summary": {
       "volatility": {
-        "conditional_next_day": 1.45,
-        "conditional_annualized": 22.98,
-        "unconditional_annualized": 24.12,
-        "trend": "expanding"
+        "conditional_next_day": 1.5413,
+        "conditional_annualized": 24.4661,
+        "unconditional_annualized": 27.6083,
+        "trend": "contracting"
       },
       "risk": {
         "0.95": {
-          "value_at_risk": -0.0238,
-          "nominal_var": 23800.0,
-          "expected_shortfall": -0.0298,
-          "nominal_expected_shortfall": 29800.0
+          "value_at_risk": -2.7153,
+          "nominal_var": 1357.65,
+          "expected_shortfall": -4.3812,
+          "nominal_expected_shortfall": 2190.6
         },
         "0.99": {
-          "value_at_risk": -0.0336,
-          "nominal_var": 33600.0,
-          "expected_shortfall": -0.0385,
-          "nominal_expected_shortfall": 38500.0
+          "value_at_risk": -4.8964,
+          "nominal_var": 2448.2,
+          "expected_shortfall": -7.2144,
+          "nominal_expected_shortfall": 3607.2
         }
       }
     },
     "horizon_forecasts": [
       {
-        "horizon_days": 5,
+        "horizon_days": 1,
         "target_date": "2026-09-30",
-        "cumulative_volatility": 3.24,
-        "annualized_volatility": 22.99,
+        "cumulative_volatility": 1.5413,
+        "annualized_volatility": 24.4661,
         "risk_metrics": {
           "0.95": {
-            "value_at_risk": -0.0533,
-            "nominal_var": 53300.0,
-            "expected_shortfall": -0.0667,
-            "nominal_expected_shortfall": 66700.0
+            "value_at_risk": -2.7153,
+            "nominal_var": 1357.65,
+            "expected_shortfall": -4.3812,
+            "nominal_expected_shortfall": 2190.6
+          }
+        }
+      },
+      {
+        "horizon_days": 5,
+        "target_date": "2026-10-06",
+        "cumulative_volatility": 3.4735,
+        "annualized_volatility": 24.663,
+        "risk_metrics": {
+          "0.95": {
+            "value_at_risk": -6.1187,
+            "nominal_var": 3059.35,
+            "expected_shortfall": -9.8732,
+            "nominal_expected_shortfall": 4936.6
           }
         }
       }
     ],
     "model_spec": {
-      "model_name": "2026-09-23T17-30-00.123456-GARCH11_AAPL",
+      "model_name": "2026-09-30T10-47-01.396909-GARCH11_AAPL",
       "model_type": "GARCH",
       "order": { "p": 1, "q": 1 },
       "distribution": "studentst",
-      "trained_at": "2026-09-23T17:30:00.123456",
+      "trained_at": "2026-09-30 10:47:01.396909",
       "data": {
-        "identifier": "AAPL",
-        "last_price_date": "2026-09-22"
+        "ticker": "AAPL",
+        "start_date": "2023-10-02",
+        "end_date": "2026-09-29",
+        "total_observations": 750,
+        "window_period": "3y"
       }
     }
   }

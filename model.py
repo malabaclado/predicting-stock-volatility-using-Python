@@ -10,13 +10,12 @@ from config import settings
 
 from data import TwelveDataAPI, SQLRepository, get_start_date, get_latest_expected_eod
 
-
 def build_model(ticker: str) -> object:
     """
     Initializes database connection, creates a SQLRepository object and a GarchModel object.
     """
     # Create DB connection
-    connection = sqlite3.connect(database=settings.db_name, check_same_thread=False)
+    connection = sqlite3.connect(database=settings.data_db_name, check_same_thread=False)
 
     # Create `SQLRepository`
     repo = SQLRepository(connection)
@@ -27,6 +26,104 @@ def build_model(ticker: str) -> object:
     # Return model
     return model
 
+def read_models_table() -> pd.DataFrame:
+    """Reads and returns the models table from the sqlite database."""
+    with sqlite3.connect(database=settings.models_db_name, check_same_thread=False) as conn:
+        df = pd.read_sql("SELECT * FROM models", conn, index_col="model_name")
+        
+    # Set column types
+    df = df.astype({
+        "ticker": str,
+        "distribution": str,
+        "window_period": str
+    })
+
+    df["trained_at"] = pd.to_datetime(df["trained_at"]).dt.date
+    df["start_date"] = pd.to_datetime(df["start_date"]).dt.date
+    df["end_date"] = pd.to_datetime(df["end_date"]).dt.date
+        
+    return df
+
+def filter_saved_models(df, payload):
+    ticker = payload.ticker
+    converged = payload.converged
+    trained_at_start = payload.trained_at.start
+    trained_at_end = payload.trained_at.end
+    min_persistence = payload.persistence.min
+    max_persistence = payload.persistence.max
+    distribution = payload.distribution
+    window_period = payload.window_period
+    limit = payload.limit
+    sort_by = payload.sort_by
+    order_by = payload.order_by
+    
+    # 1. Start with an all-True mask matching df's index
+    mask = pd.Series(True, index=df.index)
+    
+    if ticker is not None:
+        mask &= df["ticker"] == ticker
+    if distribution is not None:
+            mask &= df["distribution"] == distribution
+    if window_period is not None:
+        mask &= df["window_period"] == window_period
+        
+        
+    if converged:
+        mask &= df["converged"] == 0
+    else:
+        mask &= df["converged"] != 0
+        
+    if trained_at_start is not None:
+        mask &= df["trained_at"] >= trained_at_start
+    if trained_at_end is not None:
+        mask &= df["trained_at"] <= trained_at_end
+            
+    if min_persistence is not None:
+        mask &= df["persistence"] >= min_persistence
+    if max_persistence is not None:
+            mask &= df["persistence"] <= max_persistence
+        
+    filtered_df = df[mask]
+    
+    total = len(filtered_df)
+    is_ascending = (order_by == 'asc')
+    
+    return total, filtered_df.sort_values(by=sort_by, ascending=is_ascending).head(limit)
+
+
+def save_model_to_db(record: dict) -> dict:
+    """Inserts a single model record into the SQLite models table using SQLRepository.
+
+    Parameters
+    ----------
+    record : dict
+        Dictionary containing model metadata with 'model_name' as key or field.
+
+    Returns
+    -------
+    dict
+        The inserted record dictionary.
+    """
+    df = pd.DataFrame([record])
+    if "model_name" in df.columns:
+        df.set_index("model_name", inplace=True)
+
+    with sqlite3.connect(database=settings.models_db_name, check_same_thread=False) as conn:
+        # Prevent duplicate rows if model_name already exists
+        model_name = record.get("model_name")
+        if model_name:
+            cursor = conn.cursor()
+            table_check = cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='models'"
+            ).fetchone()
+            if table_check:
+                cursor.execute("DELETE FROM models WHERE model_name = ?", (model_name,))
+                conn.commit()
+
+        repo = SQLRepository(conn)
+        repo.insert_table(table_name="models", records=df, if_exists="append")
+
+    return record
 
 class GarchModel():
     """Class for training GARCH model and generating predictions.
@@ -163,12 +260,7 @@ class GarchModel():
         if df is None or df.empty:
             # Initialize TwelveDataAPI object
             api = TwelveDataAPI()
-            
-            # Ensure idType gets the proper string (e.g. self.id_type or 'ticker'), not the built-in `type`
-            id_type = getattr(self, "id_type", "ticker")
-            df = api.fetch_data_from_api(
-                identifier, start_date_str, idType=id_type
-            )
+            df = api.fetch_data_from_api(identifier, start_date_str)
 
             if not isinstance(df.index, pd.DatetimeIndex):
                 df.index = pd.to_datetime(df.index)
@@ -333,13 +425,18 @@ class GarchModel():
 
         """
         MODEL_STORE_DIR = settings.model_directory
+        ticker_clean = self.ticker.strip().upper()
         
         if model_name == "latest":
             if not os.path.exists(MODEL_STORE_DIR):
                 raise FileNotFoundError("Model storage directory does not exist.")
-            files = [f for f in os.listdir(MODEL_STORE_DIR) if f.endswith(".pkl")]
+            expected_suffix = f"_{ticker_clean}.pkl".lower()
+            files = [
+                f for f in os.listdir(MODEL_STORE_DIR)
+                if f.lower().endswith(expected_suffix)
+            ]
             if not files:
-                raise FileNotFoundError("No fitted model artifacts found.")
+                raise FileNotFoundError(f"No fitted model artifacts found for ticker '{ticker_clean}'.")
             model_name = sorted(files)[-1].replace(".pkl", "")
 
         file_path = os.path.join(MODEL_STORE_DIR, f"{model_name}.pkl")
@@ -348,6 +445,13 @@ class GarchModel():
 
         with open(file_path, "rb") as f:
             artifact = pickle.load(f)
+
+        artifact_ticker = str(artifact.get('ticker') or artifact.get('identifier') or '').strip().upper()
+        if artifact_ticker and artifact_ticker != ticker_clean:
+            raise ValueError(
+                f"Model artifact '{model_name}' was trained on '{artifact_ticker}', "
+                f"not on requested ticker '{ticker_clean}'."
+            )
 
         self.model = artifact['model_result']
         self.name = model_name
