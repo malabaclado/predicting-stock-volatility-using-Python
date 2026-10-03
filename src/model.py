@@ -400,6 +400,9 @@ class GarchModel():
         str
             filepath where model was saved.
         """
+        # Ensure the directory exists before saving
+        os.makedirs(self.model_directory, exist_ok=True)
+        
         # Create timestamp in ISO format
         # timestamp = pd.Timestamp.now().isoformat()
         timestamp = pd.Timestamp.now().strftime("%Y-%m-%dT%H-%M-%S.%f")
