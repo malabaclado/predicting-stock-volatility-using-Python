@@ -8,26 +8,11 @@ The application retrieves historical daily stock prices from the **Twelve Data A
 
 ## 🚀 Key Features
 
-### 1.  Econometric Modeling & Volatility Forecasting
-* **Dynamic Conditional Variance:** Fits a GARCH(p, q) model (with `Zero` mean configuration) to capture volatility clustering and leverage effects in historical log returns.
-* **Non-Constant Variance Term-Structure:** Projects multi-period conditional variance by dynamically iterating and aggregating expected daily variances ($\sum_{k=1}^h \sigma^2_{t+k}$), capturing the natural mean-reversion of the GARCH process over longer holding periods.
-
-### 2. Analytical Tail-Risk Estimation (VaR & Expected Shortfall)
-* **Dual Distribution Assumptions:** Estimates tail risk under both Gaussian and Student's t-distributions.
-* **Student's t-Distribution Unit-Variance Normalization:** Corrects Student-t quantiles using the standard GARCH adjustment factor ($\sqrt{(\nu - 2)/\nu}$) to account for the unit-variance standardization used by solvers, eliminating a common cause of risk underestimation.
-* **Analytical Expected Shortfall (ES):** Implements closed-form equations for ES under both Normal and Student's t-distributions to quantify the expected loss in the worst $\alpha\%$ of outcomes.
-
-### 3. Integrated Diagnostic Toolbox
-* **Stationarity Testing:** Employs the Augmented Dickey-Fuller (**ADF**) unit root test via `arch.unitroot` to verify stationarity of log returns.
-* **Heteroskedasticity Testing:** Implements Engle’s Lagrange Multiplier (**LM**) test via `statsmodels` to confirm the presence of ARCH effects before fitting models.
-
-### 4. Persistent Model Registry & Search
-* **Cataloged Model Metadata:** Automatically logs every fitted model into the SQLite `models` table (`models.sqlite`) with AIC, BIC, persistence ($\alpha + \beta$), convergence status, and training date.
-* **Multi-Criteria Search Endpoint:** Query saved models by ticker, convergence, date ranges, persistence thresholds, or distribution, with sorting by AIC, BIC, persistence, or training timestamp.
-
-### 5. Enterprise-Grade Hybrid Data Ingestion & Caching
-* **Timezone-Aware Scheduling:** Localizes all times to the New York exchange clock (`America/New_York`) and automatically rolls back requests if the current market is open but today's EOD data is not yet finalized (typically 5:00 PM Eastern).
-* **Double-Ended Caching Checks:** Validates local database records on both ends of the lookback window using a grace window for holidays/weekends. This avoids redundant, slow API calls while guaranteeing that users never train models on stale or incomplete data.
+* **Volatility Forecasting:** Fits GARCH(p, q) models to historical log returns to capture volatility clustering and generate multi-period variance forecasts.
+* **Tail-Risk Estimation:** Computes closed-form Value-at-Risk (VaR) and Expected Shortfall (ES) under Normal and Student's t-distributions with unit-variance quantile adjustments.
+* **Statistical Diagnostics:** Validates inputs using Augmented Dickey-Fuller (ADF) tests for stationarity and Engle's LM tests to verify ARCH effects prior to fitting.
+* **Model Registry & Search:** Persists model parameters, convergence state, persistence metrics, and information criteria (AIC/BIC) in SQLite, exposed via search and filter endpoints.
+* **Market-Aware Caching:** Aligns ingestion with New York exchange hours and validates date ranges locally to prevent stale data and eliminate redundant API calls.
 
 ---
 
@@ -322,22 +307,41 @@ Generates next-day and multi-horizon volatility predictions, alongside parametri
 
 ### 1. Daily Log Returns
 Daily prices are transformed into stationary log returns:
-$$R_t = \ln\left(\frac{P_t}{P_{t-1}}\right)$$
+
+$$
+R_t = \ln\left(\frac{P_t}{P_{t-1}}\right)
+$$
 
 ### 2. GARCH(1,1) Conditional Variance
-$$\sigma_t^2 = \omega + \alpha_1 \epsilon_{t-1}^2 + \beta_1 \sigma_{t-1}^2$$
+
+$$
+\sigma_t^2 = \omega + \alpha_1 \epsilon_{t-1}^2 + \beta_1 \sigma_{t-1}^2
+$$
+
 * **$\omega$ (omega):** Constant baseline variance.
 * **$\alpha_1$ (alpha):** Sensitivity to recent market shocks (ARCH term).
 * **$\beta_1$ (beta):** Persistence of historical volatility (GARCH term).
 * **Covariance Stationarity Constraint:** $\alpha_1 + \beta_1 < 1$.
 
 ### 3. Expected Shortfall (ES) Analytical Formula
-Under the zero-mean assumption, the conditional ES for standard Normal residuals ($Z \sim N(0,1)$) at significance level $\alpha = 1 - c$ is calculated as:
-$$\text{ES}_\alpha(Z) = -\frac{\phi(z_\alpha)}{\alpha}$$
-where $\phi$ is the standard Normal PDF and $z_\alpha$ is the normal quantile. 
+Under the zero-mean assumption, the conditional ES for standard Normal residuals ($Z \sim \mathcal{N}(0,1)$) at significance level $\alpha = 1 - c$ is calculated as:
+
+$$
+\text{ES}_\alpha(Z) = -\frac{\phi(z_\alpha)}{\alpha}
+$$
+
+where $\phi$ is the standard Normal PDF and $z_\alpha$ is the normal quantile.
 
 Under Student's t-distribution standardized to unit-variance, the conditional ES is:
-$$\text{ES}_\alpha(Z) = -\left(\frac{\nu + t_\alpha^2}{\nu - 1}\right) \frac{f(t_\alpha)}{\alpha} \times \sqrt{\frac{\nu - 2}{\nu}}$$
+
+$$
+\text{ES}_\alpha(Z) = -\left(\frac{\nu + t_\alpha^2}{\nu - 1}\right) \frac{f(t_\alpha)}{\alpha} \times \sqrt{\frac{\nu - 2}{\nu}}
+$$
+
 where $f$ is the Student's t PDF, $t_\alpha$ is the Student's t quantile, and $\nu$ is the degrees of freedom.
 
-> **Note on Sign Convention:** Consistent with institutional risk management practice, the API presents VaR and Expected Shortfall as positive loss quantities ($\text{VaR}_{\%} = |q| \times \sigma_{\text{cum}}$ and $\text{ES}_{\%} = |\text{ES}_{\text{factor}}| \times \sigma_{\text{cum}}$) alongside nominal currency loss figures.
+> **Note on Sign Convention:** Consistent with institutional risk management practice, the API presents Value-at-Risk and Expected Shortfall as positive loss quantities alongside nominal currency figures:
+>
+> $$
+> \text{VaR}_{\%} = |q| \times \sigma_{\text{cum}}, \quad \text{ES}_{\%} = |\text{ES}_{\text{factor}}| \times \sigma_{\text{cum}}
+> $$
