@@ -103,7 +103,7 @@ Searches and filters saved model artifacts cataloged in the SQLite registry (`mo
   * `trained_at` (object, optional): Date range filter (`{"start": "2026-01-01", "end": "2026-09-30"}`).
   * `persistence` (object, optional): Volatility persistence range (`{"min": 0.0, "max": 0.999}`).
   * `distribution` (string, default: `studentst`): Error distribution filter (`normal` or `studentst`).
-  * `window_period` (string, default: `3y`): Lookback period (`1y`, `3y`, or `5y`).
+  * `window_period` (string, optional): Lookback period (`1y`, `3y`, or `5y`).
   * `limit` (integer, required): Maximum number of records to return (1 to 200).
   * `sort_by` (string, required): Sorting attribute (`"aic"`, `"bic"`, `"trained_at"`, `"persistence"`).
   * `order_by` (string, optional): `"asc"` or `"desc"` (defaults to `"asc"` for aic/bic and `"desc"` for trained_at/persistence).
