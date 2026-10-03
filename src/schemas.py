@@ -127,7 +127,7 @@ class ModelSearchRequest(BaseModel):
         description="Filter by error distribution assumption. If omitted, matches all distributions.",
     )
     window_period: Optional[WindowPeriod] = Field(
-        default = WindowPeriod.THREE_YEAR,
+        default = None,
         description="Period of the training data.",
     )
     limit: int = Field(
