@@ -9,6 +9,8 @@ sample.py
 stocks.sqlite
 test.py
 /tests
+GEMINI.md
+/notebooks
 
 
 # Byte-compiled / optimized / DLL files
