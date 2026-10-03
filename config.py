@@ -21,15 +21,12 @@ def return_full_path(filename: str = ".env") -> str:
 
 class Settings(BaseSettings):
     """Uses pydantic to define settings for project."""
-
-    alpha_api_key: str
-    alpha_api_key2: str
     twelve_data_api_key: str
-    data_db_name: str
-    models_db_name: str
-    model_directory: str
-    exchange_tz: str
-    eod_available_hour: int
+    data_db_name: str = "market_data.sqlite"
+    models_db_name: str = "models.sqlite"
+    model_directory: str = "models"
+    exchange_tz: str = "America/New_York"
+    eod_available_hour: int = 17
 
     class Config:
         env_file = return_full_path(".env")

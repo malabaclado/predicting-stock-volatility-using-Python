@@ -8,7 +8,7 @@ import numpy as np
 from arch import arch_model
 from config import settings
 
-from data import TwelveDataAPI, SQLRepository, get_start_date, get_latest_expected_eod
+from src.data import TwelveDataAPI, SQLRepository, get_start_date, get_latest_expected_eod
 
 def build_model(ticker: str) -> object:
     """

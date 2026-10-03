@@ -3,14 +3,14 @@
 from fastapi import FastAPI, HTTPException, status
 from inspect import cleandoc
 import pandas as pd
-import schemas as scm
+import src.schemas as scm
 
 from arch.unitroot import ADF
 from statsmodels.stats.diagnostic import het_arch
 
-from math_helper import calculate_risk_metrics_for_horizon, get_volatility_summary, get_horizon_forecasts
-from data import get_start_date, TwelveDataAPI
-from model import build_model, read_models_table, filter_saved_models, save_model_to_db
+from src.math_helper import calculate_risk_metrics_for_horizon, get_volatility_summary, get_horizon_forecasts
+from src.data import get_start_date, TwelveDataAPI
+from src.model import build_model, read_models_table, filter_saved_models, save_model_to_db
 
 
 # ==========================================

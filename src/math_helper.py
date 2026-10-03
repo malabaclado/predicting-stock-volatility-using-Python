@@ -4,7 +4,7 @@ import pandas as pd
 from scipy import stats
 import numpy as np
 from datetime import date, timedelta
-import schemas as scm
+import src.schemas as scm
 
 def get_volatility_summary(res, annualization_factor) -> scm.VolatilitySummary:
     """
