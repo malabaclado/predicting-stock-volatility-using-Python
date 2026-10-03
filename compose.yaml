@@ -8,27 +8,28 @@ services:
       - "8000:8000"
     volumes:
       - .:/app
-      - ./stocks.sqlite:/app/stocks.sqlite
+      - ./market_data.sqlite:/app/market_data.sqlite
+      - ./models.sqlite:/app/models.sqlite
       - ./models:/app/models
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     env_file:
       - .env
     restart: always
 
-  # Container 2: Jupyter Notebooks
-  notebook:
-    build: .
-    ports:
-      - "8888:8888"
-    volumes:
-      - .:/app
-    env_file:
-      - .env
-    command: >
-      jupyter notebook 
-      --ip=0.0.0.0 
-      --port=8888 
-      --no-browser 
-      --allow-root 
-      --NotebookApp.token='' 
-      --NotebookApp.password=''
+  # # Container 2: Jupyter Notebooks
+  # notebook:
+  #   build: .
+  #   ports:
+  #     - "8888:8888"
+  #   volumes:
+  #     - .:/app
+  #   env_file:
+  #     - .env
+  #   command: >
+  #     jupyter notebook 
+  #     --ip=0.0.0.0 
+  #     --port=8888 
+  #     --no-browser 
+  #     --allow-root 
+  #     --NotebookApp.token='' 
+  #     --NotebookApp.password=''

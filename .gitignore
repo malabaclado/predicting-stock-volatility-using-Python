@@ -8,6 +8,7 @@ fastapi/
 sample.py
 stocks.sqlite
 test.py
+/tests
 
 
 # Byte-compiled / optimized / DLL files

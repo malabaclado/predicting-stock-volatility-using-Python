@@ -256,15 +256,15 @@ Generates next-day and multi-horizon volatility predictions, alongside parametri
       },
       "risk": {
         "0.95": {
-          "value_at_risk": -2.7153,
+          "value_at_risk": 2.7153,
           "nominal_var": 1357.65,
-          "expected_shortfall": -4.3812,
+          "expected_shortfall": 4.3812,
           "nominal_expected_shortfall": 2190.6
         },
         "0.99": {
-          "value_at_risk": -4.8964,
+          "value_at_risk": 4.8964,
           "nominal_var": 2448.2,
-          "expected_shortfall": -7.2144,
+          "expected_shortfall": 7.2144,
           "nominal_expected_shortfall": 3607.2
         }
       }
@@ -277,9 +277,9 @@ Generates next-day and multi-horizon volatility predictions, alongside parametri
         "annualized_volatility": 24.4661,
         "risk_metrics": {
           "0.95": {
-            "value_at_risk": -2.7153,
+            "value_at_risk": 2.7153,
             "nominal_var": 1357.65,
-            "expected_shortfall": -4.3812,
+            "expected_shortfall": 4.3812,
             "nominal_expected_shortfall": 2190.6
           }
         }
@@ -291,9 +291,9 @@ Generates next-day and multi-horizon volatility predictions, alongside parametri
         "annualized_volatility": 24.663,
         "risk_metrics": {
           "0.95": {
-            "value_at_risk": -6.1187,
+            "value_at_risk": 6.1187,
             "nominal_var": 3059.35,
-            "expected_shortfall": -9.8732,
+            "expected_shortfall": 9.8732,
             "nominal_expected_shortfall": 4936.6
           }
         }
@@ -339,3 +339,5 @@ where $\phi$ is the standard Normal PDF and $z_\alpha$ is the normal quantile.
 Under Student's t-distribution standardized to unit-variance, the conditional ES is:
 $$\text{ES}_\alpha(Z) = -\left(\frac{\nu + t_\alpha^2}{\nu - 1}\right) \frac{f(t_\alpha)}{\alpha} \times \sqrt{\frac{\nu - 2}{\nu}}$$
 where $f$ is the Student's t PDF, $t_\alpha$ is the Student's t quantile, and $\nu$ is the degrees of freedom.
+
+> **Note on Sign Convention:** Consistent with institutional risk management practice, the API presents VaR and Expected Shortfall as positive loss quantities ($\text{VaR}_{\%} = |q| \times \sigma_{\text{cum}}$ and $\text{ES}_{\%} = |\text{ES}_{\text{factor}}| \times \sigma_{\text{cum}}$) alongside nominal currency loss figures.

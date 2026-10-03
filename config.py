@@ -1,13 +1,8 @@
 """This module extracts information from your `.env` file so that
-you can use your AlphaVantage API key in other parts of the application.
+you can use your TwelveData API key in other parts of the application.
 """
 
-# The os library allows you to communicate with a computer's
-# operating system: https://docs.python.org/3/library/os.html
 import os
-
-# pydantic used for data validation: https://pydantic-docs.helpmanual.io/
-# from pydantic import BaseSettings
 from pydantic_settings import BaseSettings
 
 

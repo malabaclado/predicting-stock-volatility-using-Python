@@ -3,6 +3,7 @@
 from fastapi import FastAPI, HTTPException, status
 from inspect import cleandoc
 import pandas as pd
+import logging
 import src.schemas as scm
 
 from arch.unitroot import ADF
@@ -14,10 +15,21 @@ from src.model import build_model, read_models_table, filter_saved_models, save_
 
 
 # ==========================================
-# Math Functions
+# Configure logging
 # ==========================================
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+logger = logging.getLogger(__name__)
+
+# ==========================================
 # Start FastAPI application
+# ==========================================
+
 app = FastAPI(title="Financial Econometrics API")
 
 @app.get("/diagnostics/check", status_code=200)
@@ -346,11 +358,3 @@ def forecast(payload: scm.ForecastRequest):
         )
     )
     return response
-
-# @app.get("/models", status_code=200)
-# def list_models():
-#     return {"message" : "This endpoint returns a list of saved models based on a filter criteria."}
-
-# @app.get("/models/{model_id}", status_code=200)
-# def get_model():
-#     return {"message" : "This endpoint returns key information about a saved model."}

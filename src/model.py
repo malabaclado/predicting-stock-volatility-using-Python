@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import logging
 from glob import glob
 
 import pickle
@@ -9,6 +10,8 @@ from arch import arch_model
 from config import settings
 
 from src.data import TwelveDataAPI, SQLRepository, get_start_date, get_latest_expected_eod
+
+logger = logging.getLogger(__name__)
 
 def build_model(ticker: str) -> object:
     """
@@ -128,14 +131,14 @@ def save_model_to_db(record: dict) -> dict:
 class GarchModel():
     """Class for training GARCH model and generating predictions.
 
-    Atttributes
-    -----------
+    Attributes
+    ----------
     ticker : str
         Ticker symbol of the equity whose volatility will be predicted.
     repo : SQLRepository
         The repository where the training data will be stored.
     use_new_data : bool
-        Whether to download new data from the AlphaVantage API to train
+        Whether to download new data from the Twelve Data API to train
         the model or to use the existing data stored in the repository.
     model_directory : str
         Path for directory where trained models will be stored.
@@ -198,14 +201,16 @@ class GarchModel():
                         reason.append("start date incomplete")
                     if not is_end_valid:
                         reason.append("end date incomplete/stale")
-                    print(
-                        f"[Cache Incomplete ({', '.join(reason)})] "
-                        f"Requested range: {earliest_expected_date.date()} to {latest_expected_date.date()}, "
-                        f"cached range: {earliest_cached.date()} to {latest_cached.date()}. "
-                        f"Fetching fresh data..."
+                    logger.warning(
+                        "[Cache Incomplete: %s] Requested: %s to %s, Cached: %s to %s. Fetching fresh data...",
+                        ", ".join(reason),
+                        earliest_expected_date.date(),
+                        latest_expected_date.date(),
+                        earliest_cached.date(),
+                        latest_cached.date()
                     )
         except (ValueError, Exception) as exc:
-            print(f"[Cache Miss] {exc}. Fetching from API...")
+            logger.info("[Cache Miss] %s. Fetching from API...", exc)
         
         return df
         
@@ -216,45 +221,11 @@ class GarchModel():
         start_date_str = get_start_date(period)
         earliest_expected_date = pd.to_datetime(start_date_str)
         latest_expected_date = get_latest_expected_eod()
-        end_date_str = latest_expected_date.strftime("%Y-%m-%d")
 
         df = None
         
         if not use_new_data:
-            # 1. Try reading from SQLite cache
-            try:
-                cached_df = connection.read_table(
-                    identifier, start_date_str, end_date_str
-                )
-                if not cached_df.empty:
-                    # Normalize index to DatetimeIndex for accurate date comparison
-                    if not isinstance(cached_df.index, pd.DatetimeIndex):
-                        cached_df.index = pd.to_datetime(cached_df.index)
-
-                    # Check if the cache covers the full requested lookback period
-                    earliest_cached = cached_df.index.min()
-                    latest_cached = cached_df.index.max()
-                    
-                    is_start_valid = earliest_cached <= earliest_expected_date 
-                    is_end_valid = latest_cached >= latest_expected_date
-                    
-                    if is_start_valid and is_end_valid:
-                        df = cached_df
-                    else:
-                        reason = []
-                        if not is_start_valid:
-                            reason.append("start date incomplete")
-                        if not is_end_valid:
-                            reason.append("end date incomplete/stale")
-                        print(
-                            f"[Cache Incomplete ({', '.join(reason)})] "
-                            f"Requested range: {earliest_expected_date.date()} to {latest_expected_date.date()}, "
-                            f"cached range: {earliest_cached.date()} to {latest_cached.date()}. "
-                            f"Fetching fresh data..."
-                        )
-            except (ValueError, Exception) as exc:
-                print(f"[Cache Miss] {exc}. Fetching from API...")
-        
+            df = self._check_cache(start_date_str)
 
         # 2. Fetch from API if cache was missing or incomplete
         if df is None or df.empty:
@@ -267,7 +238,7 @@ class GarchModel():
 
             # 3. Save or update cache in database
             connection.insert_table(identifier, df)
-            print("Data saved to /market_data.sqlite")
+            logger.info("Successfully updated market data cache for %s in SQLite", identifier)
 
         # 4. Filter to exact requested window
         df = df.loc[
@@ -291,7 +262,6 @@ class GarchModel():
     def fit(self, p, q, dist):
 
         """Create model, fit to `self.data`, and attach to `self.model` attribute.
-        For assignment, also assigns adds metrics to `self.aic` and `self.bic`.
 
         Parameters
         ----------
@@ -458,7 +428,7 @@ class GarchModel():
 
         self.model = artifact['model_result']
         self.name = model_name
-        print(f"Loading {model_name} success!")
+        logger.info("Successfully loaded model artifact '%s'", model_name)
         
         return artifact
 

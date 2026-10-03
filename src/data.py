@@ -1,8 +1,3 @@
-"""This is for all the code used to interact with the AlphaVantage API
-and the SQLite database. Remember that the API relies on a key that is
-stored in the `.env` file and imported via the `config` module.
-"""
-
 import pandas as pd
 import requests
 from config import settings

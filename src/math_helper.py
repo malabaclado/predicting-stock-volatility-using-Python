@@ -1,3 +1,4 @@
+import logging
 import math
 from typing import Dict, Tuple, List
 import pandas as pd
@@ -5,6 +6,8 @@ from scipy import stats
 import numpy as np
 from datetime import date, timedelta
 import src.schemas as scm
+
+logger = logging.getLogger(__name__)
 
 def get_volatility_summary(res, annualization_factor) -> scm.VolatilitySummary:
     """
@@ -162,8 +165,7 @@ def get_horizon_forecasts(payload,
         ann_vol = (cum_vol / math.sqrt(h)) * math.sqrt(annualization_factor)
         target_date = advance_business_days(last_price_date, h)
         
-        print(f'Day {h} annual volatility: {ann_vol}')
-        print(f'Day {h} target date: {target_date}')
+        logger.info("Horizon %sd target date: %s | annualized volatility: %.4f", h, target_date, ann_vol)
 
         h_risk_metrics = calculate_risk_metrics_for_horizon(
             cumulative_vol=cum_vol,
