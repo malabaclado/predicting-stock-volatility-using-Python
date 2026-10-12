@@ -1,6 +1,7 @@
 ### IMPORT PACKAGES
 
-from fastapi import FastAPI, HTTPException, status
+from typing import Annotated
+from fastapi import FastAPI, HTTPException, status, Body
 from inspect import cleandoc
 import pandas as pd
 import logging
@@ -32,7 +33,20 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Financial Econometrics API")
 
-@app.get("/diagnostics/check", status_code=200)
+@app.get(
+    "/diagnostics/check", 
+    status_code=200, 
+    operation_id="diagnostics",
+    tags=["Econometrics API"],
+    summary="Run stationarity and ARCH effect diagnostics",
+    description=(
+        "Runs pre-estimation statistical diagnostics on historical daily asset returns.\n\n"
+        "- **Augmented Dickey-Fuller (ADF) Test**: Verifies time-series stationarity.\n"
+        "- **Engle's LM Test**: Detects autoregressive conditional heteroskedasticity (ARCH effects).\n\n"
+        "Returns test statistics, p-values, evaluated sample date ranges, and an automated "
+        "recommendation indicating whether GARCH modeling is appropriate."
+    ),
+)
 def diagnostics(ticker: str, period: scm.WindowPeriod = scm.WindowPeriod.THREE_YEAR):
     """Tests stationarity and ARCH effects on a time-series of equity returns during a specified period."""
     ticker_clean = ticker.strip().upper()
@@ -83,7 +97,19 @@ def diagnostics(ticker: str, period: scm.WindowPeriod = scm.WindowPeriod.THREE_Y
 @app.post(
     "/model/search", 
     status_code=200,
+    tags=["Econometrics API"],
     response_model_exclude_none=True,
+    operation_id="search_model",
+    summary="Search and filter trained volatility models",
+    description=(
+        "Queries the database registry for previously fitted and saved GARCH model artifacts.\n\n"
+        "Supports filtering by:\n"
+        "- **Ticker symbol** and **lookback window**\n"
+        "- **Training date range**\n"
+        "- **GARCH order (p, q)** and **error distribution**\n"
+        "- **Persistence threshold** and **convergence status**\n\n"
+        "Returns model specifications, goodness-of-fit metrics (AIC, BIC, persistence), and metadata."
+    ),
 )
 def search_model(payload: scm.ModelSearchRequest):
     # Unpack payload
@@ -133,11 +159,19 @@ def search_model(payload: scm.ModelSearchRequest):
 @app.post(
     "/models/fit", 
     response_model=scm.FitResponse, 
+    tags=["Econometrics API"],
     response_model_exclude_none=True,
     status_code=status.HTTP_201_CREATED, 
     operation_id="fit_garch_model",
-    summary="Fit GARCH(p,q) volatility model",
-    description="""Fits an **autoregressive conditional heteroskedasticity (GARCH)** model on historical daily log returns.""",
+    summary="Fit and persist GARCH(p, q) volatility model",
+    description=(
+        "Estimates a Generalized Autoregressive Conditional Heteroskedasticity (GARCH) model "
+        "on daily percentage returns.\n\n"
+        "- Fetches or uses cached historical market prices for the requested lookback window.\n"
+        "- Configures lag orders (p, q) and error distributions (_normal_ or _studentst_).\n"
+        "- Saves the serialized model artifact (.pkl) and logs metadata to SQLite.\n"
+        "- Returns goodness-of-fit metrics (Log-Likelihood, AIC, BIC) and optional coefficient estimates."
+    ),
     responses={
         201: {
             "description": "Model fitted successfully and artifact generated.",
@@ -284,10 +318,70 @@ def fit(payload: scm.FitRequest):
 @app.post(
     "/models/forecast", 
     response_model=scm.ForecastResponse,
+    tags=["Econometrics API"],
     response_model_exclude_none=True,
-    status_code=200
+    status_code=status.HTTP_200_OK,
+    operation_id="forecast",
+    summary="Generate volatility and Value-at-Risk (VaR) forecasts",
+    description=(
+        "Generates out-of-sample conditional volatility forecasts and portfolio risk estimates using "
+        "a saved GARCH model artifact.\n\n"
+        "- **Volatility Projections**: 1-day ahead and multi-day horizon conditional and annualized volatility.\n"
+        "- **Tail Risk Assessment**: Parametric Value-at-Risk (VaR) and Expected Shortfall (ES) across configurable confidence levels (e.g., 95%, 99%).\n"
+        "- **Multi-horizon Breakdown**: Computes cumulative volatility and nominal loss figures scaled to position size."
+    ),
+    responses={
+        200: {
+            "description": "Volatility forecasts and risk projections computed successfully.",
+        },
+        400: {
+            "model": scm.ErrorDetail,
+            "description": "Invalid forecast request parameters or model distribution error.",
+        },
+        404: {
+            "model": scm.ErrorDetail,
+            "description": "Saved model artifact not found for the requested ticker.",
+        },
+    },
 )
-def forecast(payload: scm.ForecastRequest):
+def forecast(
+    payload: Annotated[
+        scm.ForecastRequest,
+        Body(
+            description="Forecast input payload specifying target asset, model artifact identifier, horizons, and risk options.",
+            openapi_examples={
+                "multi_horizon": {
+                    "summary": "Multi-Horizon & VaR Projections (Default)",
+                    "description": "Forecast 1-day, 5-day, 20-day, and 60-day volatility with 95% and 99% VaR on a $100,000 position.",
+                    "value": {
+                        "ticker": "AAPL",
+                        "use_model": "latest",
+                        "horizon": [1, 5, 20, 60],
+                        "portfolio_value": 100000.0,
+                        "annualization_factor": 252,
+                        "value_at_risk": {
+                            "confidence_levels": [0.95, 0.99]
+                        }
+                    },
+                },
+                "single_day": {
+                    "summary": "1-Day Ahead Volatility Only",
+                    "description": "Minimal configuration computing next-day conditional volatility and risk on default portfolio size.",
+                    "value": {
+                        "ticker": "AAPL",
+                        "use_model": "latest",
+                        "portfolio_value": 10000.0
+                    },
+                },
+            },
+        ),
+    ]
+):
+    """Generate conditional volatility forecasts and parametric Value-at-Risk.
+
+    Loads a persisted GARCH model artifact (or the latest model for the given ticker),
+    forecasts out-of-sample conditional variance up to the maximum requested horizon,
+    and calculates annualized volatility together with parametric VaR and Expected Shortfall."""
     ticker = payload.ticker.strip().upper()
     model_name = payload.use_model
     annualization_factor = payload.annualization_factor

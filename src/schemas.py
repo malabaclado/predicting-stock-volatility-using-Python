@@ -254,7 +254,9 @@ class FitResponse(BaseModel):
 class VaRConfig(BaseModel):
     confidence_levels: List[float] = Field(
         default=[0.95, 0.99],
-        description="Confidence thresholds for VaR and ES (e.g. 0.95, 0.99).",
+        title="Confidence Levels",
+        description="Confidence thresholds for VaR and Expected Shortfall calculations (values strictly between 0.50 and 1.00).",
+        examples=[[0.95, 0.99]],
     )
     # method: Literal["parametric", "historical"] = Field(
     #     default="parametric",
@@ -275,14 +277,18 @@ class VaRConfig(BaseModel):
 class ForecastRequest(BaseModel):
     ticker: str = Field(
         ...,
+        title="Asset Ticker",
+        description="Equities or asset ticker symbol (case-insensitive, e.g. AAPL, MSFT).",
+        min_length=1,
+        max_length=10,
         examples=["AAPL"],
-        description="Asset ticker symbol",
         validation_alias=AliasChoices("ticker", "identifier"),
     )
     use_model: str = Field(
         default="latest",
+        title="Model Identifier",
+        description="Specific saved model artifact name, or 'latest' to automatically select the most recently trained model for this ticker.",
         examples=["latest", "2026-09-05T20-03-05.076395-GARCH11_AAPL"],
-        description="Use a specific model from saved models. Defaults to 'latest'.",
     )
 
     @field_validator("ticker")
@@ -291,24 +297,28 @@ class ForecastRequest(BaseModel):
         return v.strip().upper()
     horizon: Optional[List[int]] = Field(
         default=None,
-        examples=[[1,5,20,60]],
-        description="Target forecast holding periods in trading days.",
+        title="Forecast Horizons (Days)",
+        description="List of out-of-sample forecast holding periods in trading days (each between 1 and 252 days). If omitted, only the 1-day ahead forecast is computed.",
+        examples=[[1, 5, 20, 60]],
     )
     portfolio_value: float = Field(
         default=10000.0,
         gt=0,
-        examples=[1000000.00],
-        description="Nominal position size in account base currency.",
+        title="Portfolio Position Value",
+        description="Nominal portfolio position size in account base currency used to scale monetary VaR and Expected Shortfall values.",
+        examples=[100000.0],
     )
     annualization_factor: int = Field(
         default=252,
         ge=1,
         le=365,
+        title="Annualization Factor",
+        description="Annual trading days multiplier used for annualizing daily conditional volatility (252 for equities, 365 for crypto).",
         examples=[252],
-        description="Annual trading days multiplier (e.g., 252 for equities, 365 for crypto).",
     )
     value_at_risk: VaRConfig = Field(
         default_factory=VaRConfig,
+        title="Value-at-Risk Configuration",
         description="Configuration parameters for VaR and Expected Shortfall calculations.",
     )
 
